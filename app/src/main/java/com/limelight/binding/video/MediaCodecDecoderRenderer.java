@@ -984,68 +984,45 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             return;
         }
 
-        // Calculate the optimal presentation time that minimizes latency while avoiding stutters
-        // We want to present the frame as close as possible to the next vsync
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            // Get the time until the next vsync
-            long vsyncOffsetNanos = activity.getWindowManager().getDefaultDisplay().getAppVsyncOffsetNanos();
-            long nextVsyncNanos = frameTimeNanos + ((vsyncOffsetNanos > 0) ? (16666666L - vsyncOffsetNanos) : 0);
-            
-            // If we have a frame that's too old, drop it to reduce latency
-            if (lastRenderedFrameTimeNanos > 0 && 
-                (frameTimeNanos - lastRenderedFrameTimeNanos) > 16666666L * 2) {
-                // Drop the oldest frame in the queue to catch up
-                Integer oldBuffer = outputBufferQueue.poll();
-                if (oldBuffer != null) {
+        // Calculate the next vsync time
+        long nextVsyncTime = System.nanoTime() - activity.getWindowManager().getDefaultDisplay().getAppVsyncOffsetNanos();
+        
+        // Only process a frame if enough time has passed since the last frame
+        // This prevents micro-stuttering while maintaining low latency
+        long timeSinceLastFrame = nextVsyncTime - lastRenderedFrameTimeNanos;
+        long minFrameInterval = 1000000000L / (refreshRate * 2); // Half of frame interval
+        
+        if (timeSinceLastFrame >= minFrameInterval) {
+            Integer nextOutputBuffer = outputBufferQueue.poll();
+            if (nextOutputBuffer != null) {
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                        videoDecoder.releaseOutputBuffer(nextOutputBuffer, nextVsyncTime);
+                    } else {
+                        videoDecoder.releaseOutputBuffer(nextOutputBuffer, true);
+                    }
+
+                    lastRenderedFrameTimeNanos = nextVsyncTime;
+                    activeWindowVideoStats.totalFramesRendered++;
+                } catch (IllegalStateException ignored) {
                     try {
-                        videoDecoder.releaseOutputBuffer(oldBuffer, false);
+                        // Try to avoid leaking the output buffer by releasing it without rendering
+                        videoDecoder.releaseOutputBuffer(nextOutputBuffer, false);
                     } catch (IllegalStateException e) {
+                        // This will leak nextOutputBuffer, but there's really nothing else we can do
                         e.printStackTrace();
+                        handleDecoderException(e);
                     }
                 }
             }
-            
-            frameTimeNanos = nextVsyncNanos;
         }
 
-        Integer nextOutputBuffer = outputBufferQueue.poll();
-        if (nextOutputBuffer != null) {
-            try {
-                // Track the last rendered frame time for frame pacing
-                lastRenderedFrameTimeNanos = frameTimeNanos;
-
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                    // Use the calculated optimal presentation time
-                    videoDecoder.releaseOutputBuffer(nextOutputBuffer, frameTimeNanos);
-                }
-                else {
-                    videoDecoder.releaseOutputBuffer(nextOutputBuffer, true);
-                }
-
-                activeWindowVideoStats.totalFramesRendered++;
-            } catch (IllegalStateException ignored) {
-                try {
-                    // Try to avoid leaking the output buffer by releasing it without rendering
-                    videoDecoder.releaseOutputBuffer(nextOutputBuffer, false);
-                } catch (IllegalStateException e) {
-                    // This will leak nextOutputBuffer, but there's really nothing else we can do
-                    e.printStackTrace();
-                    handleDecoderException(e);
-                }
-            }
-        }
-
-        // Attempt codec recovery even if we have nothing to render right now
+        // Attempt codec recovery even if we have nothing to render right now. Recovery can still
+        // be required even if the codec died before giving any output.
         doCodecRecoveryIfRequired(CR_FLAG_CHOREOGRAPHER);
 
         // Request another callback for next frame
-        // Post with a slight offset to ensure we get called before the next vsync
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            // Use a more aggressive timing for the next callback
-            Choreographer.getInstance().postFrameCallbackDelayed(this, -2);
-        } else {
-            Choreographer.getInstance().postFrameCallback(this);
-        }
+        Choreographer.getInstance().postFrameCallback(this);
     }
 
     private void startChoreographerThread() {
@@ -1076,8 +1053,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 BufferInfo info = new BufferInfo();
                 while (!stopping) {
                     try {
-                        // Try to output a frame with a shorter timeout for lower latency
-                        int outIndex = videoDecoder.dequeueOutputBuffer(info, 10000); // Reduced from 50000
+                        // Try to output a frame
+                        int outIndex = videoDecoder.dequeueOutputBuffer(info, 50000);
                         if (outIndex >= 0) {
                             long presentationTimeUs = info.presentationTimeUs;
                             int lastIndex = outIndex;
@@ -1154,8 +1131,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         } else {
                             switch (outIndex) {
                                 case MediaCodec.INFO_TRY_AGAIN_LATER:
-                                    // Add a small sleep to prevent busy waiting
-                                    Thread.sleep(1);
                                     break;
                                 case MediaCodec.INFO_OUTPUT_FORMAT_CHANGED:
                                     LimeLog.info("Output format changed");
@@ -1168,9 +1143,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         }
                     } catch (IllegalStateException e) {
                         handleDecoderException(e);
-                    } catch (InterruptedException e) {
-                        // We're shutting down
-                        return;
                     } finally {
                         doCodecRecoveryIfRequired(CR_FLAG_RENDER_THREAD);
                     }
