@@ -28,15 +28,15 @@
         <com.limelight.preferences.SeekBarPreference
             android:dialogMessage="@string/summary_seekbar_bitrate"
             android:key="seekbar_bitrate_kbps"
-            android:max="300000"
+            android:max="500000"
             android:summary="@string/summary_seekbar_bitrate"
             android:text="@string/suffix_seekbar_bitrate_mbps"
             android:title="@string/title_seekbar_bitrate"
             app:iconSpaceReserved="false"
             seekbar:divisor="1000"
             seekbar:keyStep="1000"
-            seekbar:min="500"
-            seekbar:step="500" />
+            seekbar:min="10000"
+            seekbar:step="10000" />
         <com.limelight.preferences.SeekBarPreference
             android:dialogMessage="@string/summary_seekbar_metered_bitrate"
             android:key="seekbar_metered_bitrate_kbps"

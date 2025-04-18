@@ -984,51 +984,68 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             return;
         }
 
+        // Calculate the optimal presentation time that minimizes latency while avoiding stutters
+        // We want to present the frame as close as possible to the next vsync
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            frameTimeNanos -= activity.getWindowManager().getDefaultDisplay().getAppVsyncOffsetNanos();
+            // Get the time until the next vsync
+            long vsyncOffsetNanos = activity.getWindowManager().getDefaultDisplay().getAppVsyncOffsetNanos();
+            long nextVsyncNanos = frameTimeNanos + ((vsyncOffsetNanos > 0) ? (16666666L - vsyncOffsetNanos) : 0);
+            
+            // If we have a frame that's too old, drop it to reduce latency
+            if (lastRenderedFrameTimeNanos > 0 && 
+                (frameTimeNanos - lastRenderedFrameTimeNanos) > 16666666L * 2) {
+                // Drop the oldest frame in the queue to catch up
+                Integer oldBuffer = outputBufferQueue.poll();
+                if (oldBuffer != null) {
+                    try {
+                        videoDecoder.releaseOutputBuffer(oldBuffer, false);
+                    } catch (IllegalStateException e) {
+                        e.printStackTrace();
+                    }
+                }
+            }
+            
+            frameTimeNanos = nextVsyncNanos;
         }
 
-        // Don't render unless a new frame is due. This prevents microstutter when streaming
-        // at a frame rate that doesn't match the display (such as 60 FPS on 120 Hz).
-        long actualFrameTimeDeltaNs = frameTimeNanos - lastRenderedFrameTimeNanos;
-        long expectedFrameTimeDeltaNs = 800000000 / refreshRate; // within 80% of the next frame
-        if (actualFrameTimeDeltaNs >= expectedFrameTimeDeltaNs) {
-            // Render up to one frame when in frame pacing mode.
-            //
-            // NB: Since the queue limit is 2, we won't starve the decoder of output buffers
-            // by holding onto them for too long. This also ensures we will have that 1 extra
-            // frame of buffer to smooth over network/rendering jitter.
-            Integer nextOutputBuffer = outputBufferQueue.poll();
-            if (nextOutputBuffer != null) {
-                try {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                        videoDecoder.releaseOutputBuffer(nextOutputBuffer, frameTimeNanos);
-                    }
-                    else {
-                        videoDecoder.releaseOutputBuffer(nextOutputBuffer, true);
-                    }
+        Integer nextOutputBuffer = outputBufferQueue.poll();
+        if (nextOutputBuffer != null) {
+            try {
+                // Track the last rendered frame time for frame pacing
+                lastRenderedFrameTimeNanos = frameTimeNanos;
 
-                    lastRenderedFrameTimeNanos = frameTimeNanos;
-                    activeWindowVideoStats.totalFramesRendered++;
-                } catch (IllegalStateException ignored) {
-                    try {
-                        // Try to avoid leaking the output buffer by releasing it without rendering
-                        videoDecoder.releaseOutputBuffer(nextOutputBuffer, false);
-                    } catch (IllegalStateException e) {
-                        // This will leak nextOutputBuffer, but there's really nothing else we can do
-                        e.printStackTrace();
-                        handleDecoderException(e);
-                    }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    // Use the calculated optimal presentation time
+                    videoDecoder.releaseOutputBuffer(nextOutputBuffer, frameTimeNanos);
+                }
+                else {
+                    videoDecoder.releaseOutputBuffer(nextOutputBuffer, true);
+                }
+
+                activeWindowVideoStats.totalFramesRendered++;
+            } catch (IllegalStateException ignored) {
+                try {
+                    // Try to avoid leaking the output buffer by releasing it without rendering
+                    videoDecoder.releaseOutputBuffer(nextOutputBuffer, false);
+                } catch (IllegalStateException e) {
+                    // This will leak nextOutputBuffer, but there's really nothing else we can do
+                    e.printStackTrace();
+                    handleDecoderException(e);
                 }
             }
         }
 
-        // Attempt codec recovery even if we have nothing to render right now. Recovery can still
-        // be required even if the codec died before giving any output.
+        // Attempt codec recovery even if we have nothing to render right now
         doCodecRecoveryIfRequired(CR_FLAG_CHOREOGRAPHER);
 
         // Request another callback for next frame
-        Choreographer.getInstance().postFrameCallback(this);
+        // Post with a slight offset to ensure we get called before the next vsync
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            // Use a more aggressive timing for the next callback
+            Choreographer.getInstance().postFrameCallbackDelayed(this, -2);
+        } else {
+            Choreographer.getInstance().postFrameCallback(this);
+        }
     }
 
     private void startChoreographerThread() {
@@ -1038,7 +1055,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
 
         // We use a separate thread to avoid any main thread delays from delaying rendering
-        choreographerHandlerThread = new HandlerThread("Video - Choreographer", Process.THREAD_PRIORITY_DEFAULT + Process.THREAD_PRIORITY_MORE_FAVORABLE);
+        choreographerHandlerThread = new HandlerThread("Video - Choreographer", Process.THREAD_PRIORITY_URGENT_DISPLAY + Process.THREAD_PRIORITY_MORE_FAVORABLE);
         choreographerHandlerThread.start();
 
         // Start the frame callbacks
@@ -1059,8 +1076,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 BufferInfo info = new BufferInfo();
                 while (!stopping) {
                     try {
-                        // Try to output a frame
-                        int outIndex = videoDecoder.dequeueOutputBuffer(info, 50000);
+                        // Try to output a frame with a shorter timeout for lower latency
+                        int outIndex = videoDecoder.dequeueOutputBuffer(info, 10000); // Reduced from 50000
                         if (outIndex >= 0) {
                             long presentationTimeUs = info.presentationTimeUs;
                             int lastIndex = outIndex;
@@ -1137,6 +1154,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         } else {
                             switch (outIndex) {
                                 case MediaCodec.INFO_TRY_AGAIN_LATER:
+                                    // Add a small sleep to prevent busy waiting
+                                    Thread.sleep(1);
                                     break;
                                 case MediaCodec.INFO_OUTPUT_FORMAT_CHANGED:
                                     LimeLog.info("Output format changed");
@@ -1149,6 +1168,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         }
                     } catch (IllegalStateException e) {
                         handleDecoderException(e);
+                    } catch (InterruptedException e) {
+                        // We're shutting down
+                        return;
                     } finally {
                         doCodecRecoveryIfRequired(CR_FLAG_RENDER_THREAD);
                     }
@@ -1156,7 +1178,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             }
         };
         rendererThread.setName("Video - Renderer (MediaCodec)");
-        rendererThread.setPriority(Thread.NORM_PRIORITY + 2);
+        rendererThread.setPriority(Thread.MAX_PRIORITY);
         rendererThread.start();
     }
 

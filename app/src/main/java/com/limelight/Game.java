@@ -92,6 +92,7 @@ import android.view.Window;
 import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.view.inputmethod.InputMethodManager;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -196,6 +197,10 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     private TextView performanceOverlayLite;
 
     private TextView performanceOverlayBig;
+
+    private LinearLayout quickActions;
+
+    private boolean quickActionsVisbile = false;
 
     private MediaCodecDecoderRenderer decoderRenderer;
     private boolean reportedCrash;
@@ -331,6 +336,48 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                         WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
             }
         }
+
+        // hotkeys funcs
+        findViewById(R.id.btnQuit).setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+//                sendKeys(new short[]{KeyboardTranslator.VK_LWIN});
+                sendKeys(new short[]{KeyboardTranslator.VK_LMENU, KeyboardTranslator.VK_F4});
+            }
+        });
+
+        findViewById(R.id.btnWin).setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+//                sendKeys(new short[]{KeyboardTranslator.VK_LWIN});
+                sendKeys(new short[]{KeyboardTranslator.VK_LWIN});
+            }
+        });
+
+        findViewById(R.id.btnHDR).setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                sendKeys(new short[]{KeyboardTranslator.VK_LWIN, KeyboardTranslator.VK_MENU, KeyboardTranslator.VK_B});
+            }
+        });
+
+        findViewById(R.id.btnDesktop).setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                sendKeys(new short[]{KeyboardTranslator.VK_LWIN, KeyboardTranslator.VK_D});
+            }
+        });
+
+        findViewById(R.id.btnHome).setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                sendKeys(new short[]{KeyboardTranslator.VK_HOME});
+            }
+        });
+
+        findViewById(R.id.btnCloseAction).setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                quickActions.setVisibility(View.GONE);
+                quickActionsVisbile = false;
+                toggleKeyboard();
+            }
+        });
+
         // Listen for non-touch events on the game surface
         streamView = findViewById(R.id.surfaceView);
         streamView.setOnGenericMotionListener(this);
@@ -386,6 +433,8 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         performanceOverlayView = findViewById(R.id.performanceOverlay);
 
         performanceOverlayLite = findViewById(R.id.performanceOverlayLite);
+
+        quickActions = findViewById(R.id.quickActions);
 
         performanceOverlayBig = findViewById(R.id.performanceOverlayBig);
 
@@ -596,7 +645,10 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
         if (prefConfig.framePacingWarpFactor > 0) {
             chosenFrameRate *= prefConfig.framePacingWarpFactor;
+        } else if (prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED) {
+            chosenFrameRate *= 4;
         }
+
 
         StreamConfiguration config = new StreamConfiguration.Builder()
                 .setResolution(
@@ -2674,9 +2726,23 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                         if (currentEventTime - threeFingerDownTime < THREE_FINGER_TAP_THRESHOLD) {
                             // This is a 3 finger tap to bring up the keyboard
                             toggleKeyboard();
+                            if(!quickActionsVisbile) {
+                                quickActions.setVisibility(View.VISIBLE);
+                                quickActionsVisbile = true;
+                            } else {
+                                quickActions.setVisibility(View.GONE);
+                                quickActionsVisbile = false;
+                            }
                             return true;
                         } else if (currentEventTime - fourFingerDownTime < FOUR_FINGER_TAP_THRESHOLD) {
                             showHidekeyBoardLayoutController();
+                            if(!quickActionsVisbile) {
+                                quickActions.setVisibility(View.VISIBLE);
+                                quickActionsVisbile = true;
+                            } else {
+                                quickActions.setVisibility(View.GONE);
+                                quickActionsVisbile = false;
+                            }
                             return true;
                         }
                     }
@@ -3379,11 +3445,45 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
     @Override
     public void onBackPressed() {
+
+        quickActions.setVisibility(View.GONE);
+        quickActionsVisbile = false;
+
         if(prefConfig.enableBackMenu){
             showGameMenu(null);
             return;
         }
         super.onBackPressed();
+    }
+
+    private static byte getModifier(short key) {
+        switch (key) {
+            case KeyboardTranslator.VK_LSHIFT:
+                return KeyboardPacket.MODIFIER_SHIFT;
+            case KeyboardTranslator.VK_LCONTROL:
+                return KeyboardPacket.MODIFIER_CTRL;
+            case KeyboardTranslator.VK_LWIN:
+                return KeyboardPacket.MODIFIER_META;
+            default:
+                return 0;
+        }
+    }
+    private void sendKeys(short[] keys) {
+        final byte[] modifier = {(byte) 0};
+        for (short key : keys) {
+            conn.sendKeyboardInput(key, KeyboardPacket.KEY_DOWN, modifier[0], (byte) 0);
+            // Apply the modifier of the pressed key, e.g. CTRL first issues a CTRL event (without
+            // modifier) and then sends the following keys with the CTRL modifier applied
+            modifier[0] |= getModifier(key);
+        }
+        new Handler().postDelayed((() -> {
+            for (int pos = keys.length - 1; pos >= 0; pos--) {
+                short key = keys[pos];
+                // Remove the keys modifier before releasing the key
+                modifier[0] &= ~getModifier(key);
+                conn.sendKeyboardInput(key, KeyboardPacket.KEY_UP, modifier[0], (byte) 0);
+            }
+        }), 25);
     }
 
     public void sendExecServerCmd(int cmdId) {
