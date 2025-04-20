@@ -5,21 +5,30 @@ import java.util.logging.FileHandler;
 import java.util.logging.Logger;
 
 public class LimeLog {
+    private static final boolean ENABLE_LOGGING = false;
     private static final Logger LOGGER = Logger.getLogger(LimeLog.class.getName());
 
     public static void info(String msg) {
-        LOGGER.info(msg);
+        if (ENABLE_LOGGING) {
+            LOGGER.info(msg);
+        }
     }
     
     public static void warning(String msg) {
-        LOGGER.warning(msg);
+        if (ENABLE_LOGGING) {
+            LOGGER.warning(msg);
+        }
     }
     
     public static void severe(String msg) {
-        LOGGER.severe(msg);
+        if (ENABLE_LOGGING) {
+            LOGGER.severe(msg);
+        }
     }
     
     public static void setFileHandler(String fileName) throws IOException {
-        LOGGER.addHandler(new FileHandler(fileName));
+        if (ENABLE_LOGGING) {
+            LOGGER.addHandler(new FileHandler(fileName));
+        }
     }
 }
