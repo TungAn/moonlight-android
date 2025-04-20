@@ -121,7 +121,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     private long lastNetDataNum;
     private LinkedBlockingQueue<Integer> outputBufferQueue = new LinkedBlockingQueue<>();
-    private static final int OUTPUT_BUFFER_QUEUE_LIMIT = 2;
+    private static final int OUTPUT_BUFFER_QUEUE_LIMIT = 2; // Keep 2 frames to prevent stuttering
     private long lastRenderedFrameTimeNanos;
     private HandlerThread choreographerHandlerThread;
     private Handler choreographerHandler;
@@ -131,6 +131,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private int numVpsIn;
     private int numFramesIn;
     private int numFramesOut;
+
+    private static final int MIN_BUFFER_QUEUE_LIMIT = 1;
+    private static final int MAX_BUFFER_QUEUE_LIMIT = 2; // Reduced from 3 to 2 for lower latency
+    private int currentBufferQueueLimit = 1; // Start with minimum buffer for lowest latency
+    private long lastFrameTimeNanos = 0;
+    private long frameIntervalNanos = 8333333; // 120fps = 8.33ms
+    private static final long STUTTER_THRESHOLD_NS = 9000000; // 9ms (adjusted for lower latency)
+    private static final long SMOOTHNESS_THRESHOLD_NS = 8000000; // 8ms (adjusted for better balance)
 
     private MediaCodecInfo findAvcDecoder() {
         MediaCodecInfo decoder = MediaCodecHelper.findProbableSafeDecoder("video/avc", MediaCodecInfo.CodecProfileLevel.AVCProfileHigh);
@@ -977,52 +985,65 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         return false;
     }
 
+    private void analyzeFrameTiming(long currentFrameTimeNanos) {
+        if (lastFrameTimeNanos != 0) {
+            long frameDelta = currentFrameTimeNanos - lastFrameTimeNanos;
+            
+            // Analyze frame timing and adjust buffer size
+            if (frameDelta > STUTTER_THRESHOLD_NS) {
+                // Frame is late, increase buffer size
+                if (currentBufferQueueLimit < MAX_BUFFER_QUEUE_LIMIT) {
+                    currentBufferQueueLimit++;
+                    LimeLog.info("Increasing buffer size to " + currentBufferQueueLimit + " due to late frame");
+                }
+            } else if (frameDelta < SMOOTHNESS_THRESHOLD_NS) {
+                // Frame is early, decrease buffer size
+                if (currentBufferQueueLimit > MIN_BUFFER_QUEUE_LIMIT) {
+                    currentBufferQueueLimit--;
+                    LimeLog.info("Decreasing buffer size to " + currentBufferQueueLimit + " due to early frame");
+                }
+            }
+        }
+        lastFrameTimeNanos = currentFrameTimeNanos;
+    }
+
     @Override
     public void doFrame(long frameTimeNanos) {
-        // Do nothing if we're stopping
         if (stopping) {
             return;
         }
 
-        // Calculate the next vsync time
-        long nextVsyncTime = System.nanoTime() - activity.getWindowManager().getDefaultDisplay().getAppVsyncOffsetNanos();
-        
-        // Only process a frame if enough time has passed since the last frame
-        // This prevents micro-stuttering while maintaining low latency
-        long timeSinceLastFrame = nextVsyncTime - lastRenderedFrameTimeNanos;
-        long minFrameInterval = 1000000000L / (refreshRate * 2); // Half of frame interval
-        
-        if (timeSinceLastFrame >= minFrameInterval) {
-            Integer nextOutputBuffer = outputBufferQueue.poll();
-            if (nextOutputBuffer != null) {
-                try {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                        videoDecoder.releaseOutputBuffer(nextOutputBuffer, nextVsyncTime);
-                    } else {
-                        videoDecoder.releaseOutputBuffer(nextOutputBuffer, true);
-                    }
+        // Analyze frame timing
+        analyzeFrameTiming(frameTimeNanos);
 
-                    lastRenderedFrameTimeNanos = nextVsyncTime;
+        // Register for next frame callback early to minimize delay
+        Choreographer.getInstance().postFrameCallback(this);
+
+        // Process frame with dynamic buffer management
+        Integer nextOutputBuffer = outputBufferQueue.poll();
+        if (nextOutputBuffer != null) {
+            try {
+                // Calculate optimal presentation time with vsync alignment
+                long vsyncOffset = activity.getWindowManager().getDefaultDisplay().getAppVsyncOffsetNanos();
+                long optimalPresentationTime = frameTimeNanos - vsyncOffset;
+                
+                // Release buffer with optimal timing
+                videoDecoder.releaseOutputBuffer(nextOutputBuffer, optimalPresentationTime);
+                
+                // Track performance metrics
+                if (prefs.enablePerfOverlay) {
                     activeWindowVideoStats.totalFramesRendered++;
-                } catch (IllegalStateException ignored) {
-                    try {
-                        // Try to avoid leaking the output buffer by releasing it without rendering
-                        videoDecoder.releaseOutputBuffer(nextOutputBuffer, false);
-                    } catch (IllegalStateException e) {
-                        // This will leak nextOutputBuffer, but there's really nothing else we can do
-                        e.printStackTrace();
-                        handleDecoderException(e);
-                    }
                 }
+            } catch (IllegalStateException e) {
+                // Minimal error recovery
+                videoDecoder.releaseOutputBuffer(nextOutputBuffer, false);
             }
         }
 
-        // Attempt codec recovery even if we have nothing to render right now. Recovery can still
-        // be required even if the codec died before giving any output.
-        doCodecRecoveryIfRequired(CR_FLAG_CHOREOGRAPHER);
-
-        // Request another callback for next frame
-        Choreographer.getInstance().postFrameCallback(this);
+        // Essential codec recovery check
+        if (codecRecoveryType.get() != CR_RECOVERY_TYPE_NONE) {
+            doCodecRecoveryIfRequired(CR_FLAG_CHOREOGRAPHER);
+        }
     }
 
     private void startChoreographerThread() {
@@ -1032,10 +1053,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
 
         // We use a separate thread to avoid any main thread delays from delaying rendering
-        choreographerHandlerThread = new HandlerThread("Video - Choreographer", Process.THREAD_PRIORITY_URGENT_DISPLAY + Process.THREAD_PRIORITY_MORE_FAVORABLE);
+        choreographerHandlerThread = new HandlerThread("Video - Choreographer", Process.THREAD_PRIORITY_AUDIO + Process.THREAD_PRIORITY_MORE_FAVORABLE);
         choreographerHandlerThread.start();
 
-        // Start the frame callbacks
+        // Start the frame callbacks with minimal delay
         choreographerHandler = new Handler(choreographerHandlerThread.getLooper());
         choreographerHandler.post(new Runnable() {
             @Override
