@@ -90,6 +90,7 @@
             android:exported="true"
             android:resizeableActivity="true"
             android:enableOnBackInvokedCallback="true"
+            android:screenOrientation="landscape"
             android:configChanges="mcc|mnc|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|screenSize|smallestScreenSize|layoutDirection">
 
             <meta-data android:name="WindowManagerPreference:FreeformWindowSize" android:value="system-default" />
@@ -111,6 +112,7 @@
             android:exported="true"
             android:resizeableActivity="true"
             android:enableOnBackInvokedCallback="true"
+            android:screenOrientation="landscape"
             android:configChanges="mcc|mnc|locale|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|screenSize|smallestScreenSize|layoutDirection">
             <meta-data android:name="WindowManagerPreference:FreeformWindowSize" android:value="system-default" />
             <meta-data android:name="WindowManagerPreference:FreeformWindowOrientation" android:value="landscape" />
@@ -119,6 +121,7 @@
             android:name=".AppView"
             android:resizeableActivity="true"
             android:enableOnBackInvokedCallback="true"
+            android:screenOrientation="landscape"
             android:configChanges="mcc|mnc|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|screenSize|smallestScreenSize|layoutDirection">
             <meta-data android:name="WindowManagerPreference:FreeformWindowSize" android:value="system-default" />
             <meta-data android:name="WindowManagerPreference:FreeformWindowOrientation" android:value="landscape" />
@@ -127,6 +130,7 @@
             android:name=".preferences.StreamSettings"
             android:resizeableActivity="true"
             android:enableOnBackInvokedCallback="true"
+            android:screenOrientation="landscape"
             android:configChanges="mcc|mnc|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|screenSize|smallestScreenSize|layoutDirection"
             android:label="Streaming Settings"
             android:theme="@style/SettingsTheme"
@@ -140,6 +144,7 @@
             android:resizeableActivity="true"
             android:windowSoftInputMode="stateVisible"
             android:enableOnBackInvokedCallback="true"
+            android:screenOrientation="landscape"
             android:configChanges="mcc|mnc|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|screenSize|smallestScreenSize|layoutDirection"
             android:label="Add Computer Manually">
             <meta-data android:name="WindowManagerPreference:FreeformWindowSize" android:value="system-default" />
@@ -159,6 +164,7 @@
             android:supportsPictureInPicture="true"
             android:resizeableActivity="true"
             android:enableOnBackInvokedCallback="false"
+            android:screenOrientation="landscape"
             android:launchMode="singleTask"
             android:excludeFromRecents="true"
             android:theme="@style/StreamTheme"
@@ -191,6 +197,7 @@
             android:name=".HelpActivity"
             android:resizeableActivity="true"
             android:enableOnBackInvokedCallback="true"
+            android:screenOrientation="landscape"
             android:configChanges="mcc|mnc|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|screenSize|smallestScreenSize|layoutDirection">
             <meta-data android:name="WindowManagerPreference:FreeformWindowSize" android:value="system-default" />
             <meta-data android:name="WindowManagerPreference:FreeformWindowOrientation" android:value="landscape" />
@@ -199,6 +206,7 @@
 
         <activity android:name=".DebugInfoActivity"
             android:launchMode="singleTask"
+            android:screenOrientation="landscape"
             android:theme="@style/StreamTheme"/>
 
         <!-- 无障碍 实体键盘 屏蔽某些快捷键 -->

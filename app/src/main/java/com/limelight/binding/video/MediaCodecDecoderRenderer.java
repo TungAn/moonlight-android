@@ -133,12 +133,28 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private int numFramesOut;
 
     private static final int MIN_BUFFER_QUEUE_LIMIT = 1;
-    private static final int MAX_BUFFER_QUEUE_LIMIT = 2; // Reduced from 3 to 2 for lower latency
-    private int currentBufferQueueLimit = 1; // Start with minimum buffer for lowest latency
+    private static final int MAX_BUFFER_QUEUE_LIMIT = 2;
+    private int currentBufferQueueLimit = 1;
     private long lastFrameTimeNanos = 0;
     private long frameIntervalNanos = 8333333; // 120fps = 8.33ms
-    private static final long STUTTER_THRESHOLD_NS = 9000000; // 9ms (adjusted for lower latency)
+    private static final long STUTTER_THRESHOLD_NS = 8500000; // 8.5ms (adjusted for lower latency)
     private static final long SMOOTHNESS_THRESHOLD_NS = 8000000; // 8ms (adjusted for better balance)
+    private static final long MAX_FRAME_TIME_NS = 9000000; // 9ms max frame time
+    private static final int FRAME_HISTORY_SIZE = 5; // Reduced for faster adaptation
+    private final long[] frameTimeHistory = new long[FRAME_HISTORY_SIZE];
+    private int frameHistoryIndex = 0;
+    private long totalFrameTime = 0;
+    private int frameCount = 0;
+    private long lastVsyncTimeNanos = 0;
+    private static final long VSYNC_DEADLINE_NS = 1000000; // 1ms deadline for VSYNC
+    private static final long INPUT_LATENCY_THRESHOLD_NS = 3000000; // 3ms threshold for input latency (reduced from 5ms)
+    private long lastInputTimeNanos = 0;
+    private int consecutiveLateFrames = 0;
+    private static final int MAX_CONSECUTIVE_LATE_FRAMES = 2; // Reduced from 3 for faster response
+    private static final long UI_THREAD_THRESHOLD_NS = 4000000; // 4ms threshold for UI thread
+    private static final long DRAW_COMMAND_THRESHOLD_NS = 4000000; // 4ms threshold for draw commands
+    private long lastUiThreadTimeNanos = 0;
+    private long lastDrawCommandTimeNanos = 0;
 
     private MediaCodecInfo findAvcDecoder() {
         MediaCodecInfo decoder = MediaCodecHelper.findProbableSafeDecoder("video/avc", MediaCodecInfo.CodecProfileLevel.AVCProfileHigh);
@@ -989,22 +1005,79 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         if (lastFrameTimeNanos != 0) {
             long frameDelta = currentFrameTimeNanos - lastFrameTimeNanos;
             
-            // Analyze frame timing and adjust buffer size
-            if (frameDelta > STUTTER_THRESHOLD_NS) {
-                // Frame is late, increase buffer size
-                if (currentBufferQueueLimit < MAX_BUFFER_QUEUE_LIMIT) {
-                    currentBufferQueueLimit++;
-                    LimeLog.info("Increasing buffer size to " + currentBufferQueueLimit + " due to late frame");
-                }
-            } else if (frameDelta < SMOOTHNESS_THRESHOLD_NS) {
-                // Frame is early, decrease buffer size
+            // Update frame time history
+            totalFrameTime -= frameTimeHistory[frameHistoryIndex];
+            frameTimeHistory[frameHistoryIndex] = frameDelta;
+            totalFrameTime += frameDelta;
+            frameHistoryIndex = (frameHistoryIndex + 1) % FRAME_HISTORY_SIZE;
+            frameCount = Math.min(frameCount + 1, FRAME_HISTORY_SIZE);
+            
+            // Calculate average frame time
+            long avgFrameTime = totalFrameTime / frameCount;
+            
+            // Check VSYNC timing
+            long vsyncDelta = currentFrameTimeNanos - lastVsyncTimeNanos;
+            if (vsyncDelta > VSYNC_DEADLINE_NS) {
+                // VSYNC is late, reduce buffer size immediately
                 if (currentBufferQueueLimit > MIN_BUFFER_QUEUE_LIMIT) {
                     currentBufferQueueLimit--;
-                    LimeLog.info("Decreasing buffer size to " + currentBufferQueueLimit + " due to early frame");
+                    LimeLog.info("Decreasing buffer size to " + currentBufferQueueLimit + " due to late VSYNC");
+                }
+            }
+            
+            // Check input latency
+            long inputDelta = currentFrameTimeNanos - lastInputTimeNanos;
+            if (inputDelta > INPUT_LATENCY_THRESHOLD_NS) {
+                consecutiveLateFrames++;
+                if (consecutiveLateFrames >= MAX_CONSECUTIVE_LATE_FRAMES) {
+                    // Reduce buffer size to improve input latency
+                    if (currentBufferQueueLimit > MIN_BUFFER_QUEUE_LIMIT) {
+                        currentBufferQueueLimit--;
+                        LimeLog.info("Decreasing buffer size to " + currentBufferQueueLimit + " due to high input latency");
+                    }
+                    consecutiveLateFrames = 0;
+                }
+            } else {
+                consecutiveLateFrames = 0;
+            }
+
+            // Check UI thread timing
+            long uiThreadDelta = currentFrameTimeNanos - lastUiThreadTimeNanos;
+            if (uiThreadDelta > UI_THREAD_THRESHOLD_NS) {
+                // UI thread is slow, reduce buffer size
+                if (currentBufferQueueLimit > MIN_BUFFER_QUEUE_LIMIT) {
+                    currentBufferQueueLimit--;
+                    LimeLog.info("Decreasing buffer size to " + currentBufferQueueLimit + " due to slow UI thread");
+                }
+            }
+
+            // Check draw command timing
+            long drawCommandDelta = currentFrameTimeNanos - lastDrawCommandTimeNanos;
+            if (drawCommandDelta > DRAW_COMMAND_THRESHOLD_NS) {
+                // Draw commands are slow, reduce buffer size
+                if (currentBufferQueueLimit > MIN_BUFFER_QUEUE_LIMIT) {
+                    currentBufferQueueLimit--;
+                    LimeLog.info("Decreasing buffer size to " + currentBufferQueueLimit + " due to slow draw commands");
+                }
+            }
+            
+            // Analyze frame timing and adjust buffer size
+            if (frameDelta > STUTTER_THRESHOLD_NS || avgFrameTime > MAX_FRAME_TIME_NS) {
+                // Frame is late or average is too high, increase buffer size
+                if (currentBufferQueueLimit < MAX_BUFFER_QUEUE_LIMIT) {
+                    currentBufferQueueLimit++;
+                    LimeLog.info("Increasing buffer size to " + currentBufferQueueLimit + " due to late frame (delta: " + (frameDelta / 1000000) + "ms, avg: " + (avgFrameTime / 1000000) + "ms)");
+                }
+            } else if (frameDelta < SMOOTHNESS_THRESHOLD_NS && avgFrameTime < frameIntervalNanos) {
+                // Frame is early and average is good, decrease buffer size immediately
+                if (currentBufferQueueLimit > MIN_BUFFER_QUEUE_LIMIT) {
+                    currentBufferQueueLimit--;
+                    LimeLog.info("Decreasing buffer size to " + currentBufferQueueLimit + " due to early frame (delta: " + (frameDelta / 1000000) + "ms, avg: " + (avgFrameTime / 1000000) + "ms)");
                 }
             }
         }
         lastFrameTimeNanos = currentFrameTimeNanos;
+        lastVsyncTimeNanos = currentFrameTimeNanos;
     }
 
     @Override
@@ -1012,6 +1085,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         if (stopping) {
             return;
         }
+
+        // Update timing metrics
+        lastInputTimeNanos = frameTimeNanos;
+        lastUiThreadTimeNanos = frameTimeNanos;
+        lastDrawCommandTimeNanos = frameTimeNanos;
 
         // Analyze frame timing
         analyzeFrameTiming(frameTimeNanos);

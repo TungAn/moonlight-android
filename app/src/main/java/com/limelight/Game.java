@@ -374,7 +374,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             public void onClick(View v) {
                 quickActions.setVisibility(View.GONE);
                 quickActionsVisbile = false;
-                toggleKeyboard();
+                hideKeyboard();
             }
         });
 
@@ -637,16 +637,24 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                     LimeLog.info("Bogus refresh rate: " + roundedRefreshRate);
                 }
                 else {
-                    chosenFrameRate = roundedRefreshRate - 1;
+                    // For 120fps target, ensure we're slightly below the refresh rate
+                    chosenFrameRate = Math.min(roundedRefreshRate - 1, 120);
                     LimeLog.info("Adjusting FPS target for screen to " + chosenFrameRate);
                 }
             }
         }
 
+        // Optimize frame pacing for 120fps
+        if (prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED) {
+            // Use a more aggressive frame pacing for 120fps
+            chosenFrameRate = Math.min(chosenFrameRate, 120);
+            LimeLog.info("Using optimized frame pacing for " + chosenFrameRate + "fps");
+        }
+
         if (prefConfig.framePacingWarpFactor > 0) {
             chosenFrameRate *= prefConfig.framePacingWarpFactor;
         } else if (prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED) {
-            chosenFrameRate *= 4;
+//            chosenFrameRate *= 4;
         }
 
 
@@ -1962,6 +1970,15 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         inputManager.toggleSoftInput(0, 0);
     }
 
+    private void hideKeyboard() {
+        LimeLog.info("Hiding keyboard overlay");
+        InputMethodManager inputManager = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+        View currentFocus = getCurrentFocus();
+        if (currentFocus != null) {
+            inputManager.hideSoftInputFromWindow(currentFocus.getWindowToken(), 0);
+        }
+    }
+
     private byte getLiTouchTypeFromEvent(MotionEvent event) {
         switch (event.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
@@ -3272,26 +3289,18 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
         surfaceCreated = true;
 
-        // Android will pick the lowest matching refresh rate for a given frame rate value, so we want
-        // to report the true FPS value if refresh rate reduction is enabled. We also report the true
-        // FPS value if there's no suitable matching refresh rate. In that case, Android could try to
-        // select a lower refresh rate that avoids uneven pull-down (ex: 30 Hz for a 60 FPS stream on
-        // a display that maxes out at 50 Hz).
+        // Optimize for 120fps
         if (mayReduceRefreshRate() || desiredRefreshRate < prefConfig.fps) {
-            desiredFrameRate = prefConfig.fps;
+            desiredFrameRate = Math.min(prefConfig.fps, 120);
         }
         else {
-            // Otherwise, we will pretend that our frame rate matches the refresh rate we picked in
-            // prepareDisplayForRendering(). This will usually be the highest refresh rate that our
-            // frame rate evenly divides into, which ensures the lowest possible display latency.
-            desiredFrameRate = desiredRefreshRate;
+            // Ensure we're using the optimal refresh rate for 120fps
+            desiredFrameRate = Math.min(desiredRefreshRate, 120);
         }
 
         // Tell the OS about our frame rate to allow it to adapt the display refresh rate appropriately
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            // We want to change frame rate even if it's not seamless, since prepareDisplayForRendering()
-            // will not set the display mode on S+ if it only differs by the refresh rate. It depends
-            // on us to trigger the frame rate switch here.
+            // Use fixed source compatibility for more stable frame timing
             holder.getSurface().setFrameRate(desiredFrameRate,
                     Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE,
                     Surface.CHANGE_FRAME_RATE_ALWAYS);
