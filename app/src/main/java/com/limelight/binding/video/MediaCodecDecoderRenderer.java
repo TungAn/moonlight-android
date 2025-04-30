@@ -147,14 +147,19 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private int frameCount = 0;
     private long lastVsyncTimeNanos = 0;
     private static final long VSYNC_DEADLINE_NS = 1000000; // 1ms deadline for VSYNC
-    private static final long INPUT_LATENCY_THRESHOLD_NS = 3000000; // 3ms threshold for input latency (reduced from 5ms)
+    private static final long INPUT_LATENCY_THRESHOLD_NS = 3000000; // 3ms threshold for input latency
     private long lastInputTimeNanos = 0;
     private int consecutiveLateFrames = 0;
-    private static final int MAX_CONSECUTIVE_LATE_FRAMES = 2; // Reduced from 3 for faster response
+    private static final int MAX_CONSECUTIVE_LATE_FRAMES = 2;
     private static final long UI_THREAD_THRESHOLD_NS = 4000000; // 4ms threshold for UI thread
     private static final long DRAW_COMMAND_THRESHOLD_NS = 4000000; // 4ms threshold for draw commands
     private long lastUiThreadTimeNanos = 0;
     private long lastDrawCommandTimeNanos = 0;
+    private static final long FRAME_SKIP_THRESHOLD_NS = 12000000; // 12ms threshold for frame skipping
+    private static final long EMERGENCY_LATENCY_THRESHOLD_NS = 15000000; // 15ms threshold for emergency measures
+    private boolean emergencyMode = false;
+    private int emergencyModeFrames = 0;
+    private static final int MAX_EMERGENCY_MODE_FRAMES = 10;
 
     private MediaCodecInfo findAvcDecoder() {
         MediaCodecInfo decoder = MediaCodecHelper.findProbableSafeDecoder("video/avc", MediaCodecInfo.CodecProfileLevel.AVCProfileHigh);
@@ -1015,6 +1020,24 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             // Calculate average frame time
             long avgFrameTime = totalFrameTime / frameCount;
             
+            // Check for emergency mode
+            if (frameDelta > EMERGENCY_LATENCY_THRESHOLD_NS) {
+                emergencyMode = true;
+                emergencyModeFrames = MAX_EMERGENCY_MODE_FRAMES;
+                currentBufferQueueLimit = MIN_BUFFER_QUEUE_LIMIT;
+                LimeLog.info("Entering emergency mode due to high latency");
+            }
+            
+            // Handle emergency mode
+            if (emergencyMode) {
+                emergencyModeFrames--;
+                if (emergencyModeFrames <= 0) {
+                    emergencyMode = false;
+                    LimeLog.info("Exiting emergency mode");
+                }
+                return;
+            }
+            
             // Check VSYNC timing
             long vsyncDelta = currentFrameTimeNanos - lastVsyncTimeNanos;
             if (vsyncDelta > VSYNC_DEADLINE_NS) {
@@ -1105,8 +1128,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 long vsyncOffset = activity.getWindowManager().getDefaultDisplay().getAppVsyncOffsetNanos();
                 long optimalPresentationTime = frameTimeNanos - vsyncOffset;
                 
-                // Release buffer with optimal timing
-                videoDecoder.releaseOutputBuffer(nextOutputBuffer, optimalPresentationTime);
+                // In emergency mode, skip frames that are too late
+                if (emergencyMode && (frameTimeNanos - optimalPresentationTime) > FRAME_SKIP_THRESHOLD_NS) {
+                    videoDecoder.releaseOutputBuffer(nextOutputBuffer, false);
+                    LimeLog.info("Skipping late frame in emergency mode");
+                } else {
+                    // Release buffer with optimal timing
+                    videoDecoder.releaseOutputBuffer(nextOutputBuffer, optimalPresentationTime);
+                }
                 
                 // Track performance metrics
                 if (prefs.enablePerfOverlay) {
