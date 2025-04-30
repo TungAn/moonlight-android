@@ -654,7 +654,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         if (prefConfig.framePacingWarpFactor > 0) {
             chosenFrameRate *= prefConfig.framePacingWarpFactor;
         } else if (prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED) {
-//            chosenFrameRate *= 4;
+           chosenFrameRate *= 4;
         }
 
 
