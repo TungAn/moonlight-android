@@ -121,7 +121,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     private long lastNetDataNum;
     private LinkedBlockingQueue<Integer> outputBufferQueue = new LinkedBlockingQueue<>();
-    private static final int OUTPUT_BUFFER_QUEUE_LIMIT = 2; // Keep 2 frames to prevent stuttering
+    private int OUTPUT_BUFFER_QUEUE_LIMIT;
+    private int MAX_BUFFER_QUEUE_LIMIT;
+    private static final int MIN_BUFFER_QUEUE_LIMIT = 1;
+    private int currentBufferQueueLimit = 1;
     private long lastRenderedFrameTimeNanos;
     private HandlerThread choreographerHandlerThread;
     private Handler choreographerHandler;
@@ -132,9 +135,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private int numFramesIn;
     private int numFramesOut;
 
-    private static final int MIN_BUFFER_QUEUE_LIMIT = 1;
-    private static final int MAX_BUFFER_QUEUE_LIMIT = 2;
-    private int currentBufferQueueLimit = 1;
     private long lastFrameTimeNanos = 0;
     private long frameIntervalNanos = 8333333; // 120fps = 8.33ms
     private static final long STUTTER_THRESHOLD_NS = 7500000; // 7.5ms (reduced from 8.5ms)
@@ -416,6 +416,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             refFrameInvalidationAvc = refFrameInvalidationHevc = false;
             LimeLog.warning("Disabling RFI due to previous crash");
         }
+
+        this.OUTPUT_BUFFER_QUEUE_LIMIT = prefs.bufferQueueLimit;
+        this.MAX_BUFFER_QUEUE_LIMIT = prefs.bufferQueueLimit;
+        this.currentBufferQueueLimit = Math.max(MIN_BUFFER_QUEUE_LIMIT, Math.min(prefs.bufferQueueLimit, 5));
     }
 
     public boolean isHevcSupported() {
@@ -1127,7 +1131,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             try {
                 // Calculate optimal presentation time with vsync alignment
                 long vsyncOffset = activity.getWindowManager().getDefaultDisplay().getAppVsyncOffsetNanos();
-                long optimalPresentationTime = frameTimeNanos - vsyncOffset;
+                long frameInterval = frameIntervalNanos;
+                // Apply frame release offset from preferences (in vsync intervals)
+                long offsetNanos = prefs.frameReleaseOffset * frameInterval;
+                long optimalPresentationTime = frameTimeNanos - vsyncOffset + offsetNanos;
                 
                 // In emergency mode, skip frames that are too late
                 if (emergencyMode && (frameTimeNanos - optimalPresentationTime) > FRAME_SKIP_THRESHOLD_NS) {

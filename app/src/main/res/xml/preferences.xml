@@ -167,6 +167,34 @@
             android:title="@string/title_exdisplay_mode"
             app:iconSpaceReserved="false" />
 
+        <com.limelight.preferences.SeekBarPreference
+            android:defaultValue="2"
+            android:dialogMessage="@string/summary_buffer_queue_limit"
+            android:key="seekbar_buffer_queue_limit"
+            android:max="5"
+            android:summary="@string/summary_buffer_queue_limit"
+            android:text="frames"
+            android:title="@string/title_buffer_queue_limit"
+            app:iconSpaceReserved="false"
+            seekbar:divisor="1"
+            seekbar:keyStep="1"
+            seekbar:min="1"
+            seekbar:step="1" />
+
+        <com.limelight.preferences.SeekBarPreference
+            android:defaultValue="0"
+            android:dialogMessage="@string/summary_frame_release_offset"
+            android:key="seekbar_frame_release_offset"
+            android:max="5"
+            android:summary="@string/summary_frame_release_offset"
+            android:text="vsync intervals"
+            android:title="@string/title_frame_release_offset"
+            app:iconSpaceReserved="false"
+            seekbar:divisor="1"
+            seekbar:keyStep="1"
+            seekbar:min="-5"
+            seekbar:step="1" />
+
     </PreferenceCategory>
 
     <PreferenceCategory

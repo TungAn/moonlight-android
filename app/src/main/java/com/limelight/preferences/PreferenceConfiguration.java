@@ -330,6 +330,14 @@ public class PreferenceConfiguration {
     public boolean gamepadMotionSensorsFallbackToDevice;
     public boolean forceMotionSensorsFallbackToDevice;
 
+    public int bufferQueueLimit = 2;
+
+    private static final String BUFFER_QUEUE_LIMIT_PREF_STRING = "seekbar_buffer_queue_limit";
+
+    private static final String FRAME_RELEASE_OFFSET_PREF_STRING = "seekbar_frame_release_offset";
+
+    public int frameReleaseOffset = 0;
+
     public static boolean isNativeResolution(int width, int height) {
         // It's not a native resolution if it matches an existing resolution option
         if (width == 640 && height == 360) {
@@ -911,6 +919,10 @@ public class PreferenceConfiguration {
         config.customResolution = prefs.getString(CUSTOM_RESOLUTION_PREF_STRING, null);
         config.customRefreshRate = prefs.getString(CUSTOM_REFRESH_RATE_PREF_STRING, null);
 //        config.customBitrate = prefs.getString(CUSTOM_BITRATE_PREF_STRING, null);
+
+        config.bufferQueueLimit = prefs.getInt(BUFFER_QUEUE_LIMIT_PREF_STRING, 2);
+
+        config.frameReleaseOffset = prefs.getInt(FRAME_RELEASE_OFFSET_PREF_STRING, 0);
 
         return config;
     }

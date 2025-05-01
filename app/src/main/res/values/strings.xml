@@ -606,4 +606,9 @@
     <!-- Compliance -->
     <string name="category_basic_settings" />
     <string name="title_checkbox_stretch_video" />
+    <string name="title_buffer_queue_limit">Buffer Queue Limit</string>
+    <string name="summary_buffer_queue_limit">Set the number of video frames to buffer for smoother playback (lower = less latency, higher = less stutter)</string>
+
+    <string name="title_frame_release_offset">Frame Release Offset</string>
+    <string name="summary_frame_release_offset">Adjust the timing of frame release relative to vsync (negative = earlier, positive = later, 0 = default)</string>
 </resources>
