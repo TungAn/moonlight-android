@@ -611,4 +611,16 @@
 
     <string name="title_frame_release_offset">Frame Release Offset</string>
     <string name="summary_frame_release_offset">Adjust the timing of frame release relative to vsync (negative = earlier, positive = later, 0 = default)</string>
+
+    <string name="title_latency_settings">Latency Settings</string>
+    <string name="title_decoder_thread_priority">Decoder Thread Priority</string>
+    <string name="summary_decoder_thread_priority">Set the CPU priority for the video decoder thread. Higher = faster decoding, but may impact other apps.</string>
+    <string name="title_codec_low_latency">Codec Low-Latency Mode</string>
+    <string name="summary_codec_low_latency">Enable special low-latency mode for the video decoder. May reduce lag, but can cause instability on some devices.</string>
+    <string name="title_surface_render_delay">Surface/Render Delay Compensation</string>
+    <string name="summary_surface_render_delay">Fine-tune the timing between decoding and display. Negative = less lag, positive = smoother on slow screens.</string>
+    <string name="title_audio_buffer_size">Audio Buffer Size</string>
+    <string name="summary_audio_buffer_size">Set how much audio is buffered. Smaller = less audio lag, but more risk of glitches.</string>
+    <string name="title_network_jitter_buffer">Network Jitter Buffer</string>
+    <string name="summary_network_jitter_buffer">Buffer incoming network data to smooth out stutter. Lower = less lag, higher = smoother on bad networks.</string>
 </resources>

@@ -336,7 +336,19 @@ public class PreferenceConfiguration {
 
     private static final String FRAME_RELEASE_OFFSET_PREF_STRING = "seekbar_frame_release_offset";
 
-    public int frameReleaseOffset = 0;
+    public int frameReleaseOffset = -1;
+
+    private static final String DECODER_THREAD_PRIORITY_PREF_STRING = "seekbar_decoder_thread_priority";
+    private static final String CODEC_LOW_LATENCY_PREF_STRING = "switch_codec_low_latency";
+    private static final String SURFACE_RENDER_DELAY_PREF_STRING = "seekbar_surface_render_delay";
+    private static final String AUDIO_BUFFER_SIZE_PREF_STRING = "seekbar_audio_buffer_size";
+    private static final String NETWORK_JITTER_BUFFER_PREF_STRING = "seekbar_network_jitter_buffer";
+
+    public int decoderThreadPriority = 3;
+    public boolean codecLowLatency = true;
+    public int surfaceRenderDelay = 0;
+    public int audioBufferSize = 256;
+    public int networkJitterBuffer = 1;
 
     public static boolean isNativeResolution(int width, int height) {
         // It's not a native resolution if it matches an existing resolution option
@@ -922,7 +934,13 @@ public class PreferenceConfiguration {
 
         config.bufferQueueLimit = prefs.getInt(BUFFER_QUEUE_LIMIT_PREF_STRING, 2);
 
-        config.frameReleaseOffset = prefs.getInt(FRAME_RELEASE_OFFSET_PREF_STRING, 0);
+        config.frameReleaseOffset = prefs.getInt(FRAME_RELEASE_OFFSET_PREF_STRING, -1);
+
+        config.decoderThreadPriority = prefs.getInt(DECODER_THREAD_PRIORITY_PREF_STRING, 3);
+        config.codecLowLatency = prefs.getBoolean(CODEC_LOW_LATENCY_PREF_STRING, true);
+        config.surfaceRenderDelay = prefs.getInt(SURFACE_RENDER_DELAY_PREF_STRING, 0);
+        config.audioBufferSize = prefs.getInt(AUDIO_BUFFER_SIZE_PREF_STRING, 256);
+        config.networkJitterBuffer = prefs.getInt(NETWORK_JITTER_BUFFER_PREF_STRING, 1);
 
         return config;
     }

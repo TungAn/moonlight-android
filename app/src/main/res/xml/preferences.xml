@@ -195,6 +195,80 @@
             seekbar:min="-5"
             seekbar:step="1" />
 
+        <!-- Latency Settings Section -->
+        <PreferenceCategory
+            android:title="@string/title_latency_settings">
+
+            <!-- Decoder Thread Priority -->
+            <com.limelight.preferences.SeekBarPreference
+                android:defaultValue="3"
+                android:dialogMessage="@string/summary_decoder_thread_priority"
+                android:key="seekbar_decoder_thread_priority"
+                android:max="3"
+                android:summary="@string/summary_decoder_thread_priority"
+                android:text="priority"
+                android:title="@string/title_decoder_thread_priority"
+                app:iconSpaceReserved="false"
+                seekbar:divisor="1"
+                seekbar:keyStep="1"
+                seekbar:min="0"
+                seekbar:step="1" />
+
+            <!-- Codec Low-Latency Mode -->
+            <androidx.preference.SwitchPreferenceCompat
+                android:defaultValue="false"
+                android:key="switch_codec_low_latency"
+                android:summary="@string/summary_codec_low_latency"
+                android:title="@string/title_codec_low_latency"
+                app:iconSpaceReserved="false" />
+
+            <!-- Surface/Render Delay Compensation -->
+            <com.limelight.preferences.SeekBarPreference
+                android:defaultValue="0"
+                android:dialogMessage="@string/summary_surface_render_delay"
+                android:key="seekbar_surface_render_delay"
+                android:max="10"
+                android:summary="@string/summary_surface_render_delay"
+                android:text="ms"
+                android:title="@string/title_surface_render_delay"
+                app:iconSpaceReserved="false"
+                seekbar:divisor="1"
+                seekbar:keyStep="1"
+                seekbar:min="-10"
+                seekbar:step="1" />
+
+            <!-- Audio Buffer Size -->
+            <com.limelight.preferences.SeekBarPreference
+                android:defaultValue="64"
+                android:dialogMessage="@string/summary_audio_buffer_size"
+                android:key="seekbar_audio_buffer_size"
+                android:max="256"
+                android:summary="@string/summary_audio_buffer_size"
+                android:text="ms"
+                android:title="@string/title_audio_buffer_size"
+                app:iconSpaceReserved="false"
+                seekbar:divisor="1"
+                seekbar:keyStep="32"
+                seekbar:min="32"
+                seekbar:step="32" />
+
+            <!-- Network Jitter Buffer -->
+            <com.limelight.preferences.SeekBarPreference
+                android:defaultValue="20"
+                android:dialogMessage="@string/summary_network_jitter_buffer"
+                android:key="seekbar_network_jitter_buffer"
+                android:max="100"
+                android:summary="@string/summary_network_jitter_buffer"
+                android:text="ms"
+                android:title="@string/title_network_jitter_buffer"
+                app:iconSpaceReserved="false"
+                seekbar:divisor="1"
+                seekbar:keyStep="5"
+                seekbar:min="0"
+                seekbar:step="5" />
+
+        </PreferenceCategory>
+
     </PreferenceCategory>
 
     <PreferenceCategory

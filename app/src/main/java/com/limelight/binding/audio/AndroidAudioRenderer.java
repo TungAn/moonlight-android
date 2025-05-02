@@ -17,12 +17,14 @@ public class AndroidAudioRenderer implements AudioRenderer {
 
     private final Context context;
     private final boolean enableAudioFx;
+    private int customBufferSize = -1;
 
     private AudioTrack track;
 
-    public AndroidAudioRenderer(Context context, boolean enableAudioFx) {
+    public AndroidAudioRenderer(Context context, boolean enableAudioFx, int customBufferSize) {
         this.context = context;
         this.enableAudioFx = enableAudioFx;
+        this.customBufferSize = customBufferSize;
     }
 
     private AudioTrack createAudioTrack(int channelConfig, int sampleRate, int bufferSize, boolean lowLatency) {
@@ -145,6 +147,10 @@ public class AndroidAudioRenderer implements AudioRenderer {
                 default:
                     // Unreachable
                     throw new IllegalStateException();
+            }
+
+            if (customBufferSize > 0) {
+                bufferSize = customBufferSize;
             }
 
             // Skip low latency options if hardware sample rate doesn't match the content

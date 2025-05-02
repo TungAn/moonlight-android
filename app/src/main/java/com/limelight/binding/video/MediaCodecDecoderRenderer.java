@@ -118,6 +118,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private int lastFrameNumber;
     private int refreshRate;
     private PreferenceConfiguration prefs;
+    private int decoderThreadPriority;
+    private boolean codecLowLatency;
+    private int surfaceRenderDelay;
+    private int audioBufferSize;
+    private int networkJitterBuffer;
 
     private long lastNetDataNum;
     private LinkedBlockingQueue<Integer> outputBufferQueue = new LinkedBlockingQueue<>();
@@ -417,9 +422,17 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             LimeLog.warning("Disabling RFI due to previous crash");
         }
 
-        this.OUTPUT_BUFFER_QUEUE_LIMIT = prefs.bufferQueueLimit;
-        this.MAX_BUFFER_QUEUE_LIMIT = prefs.bufferQueueLimit;
-        this.currentBufferQueueLimit = Math.max(MIN_BUFFER_QUEUE_LIMIT, Math.min(prefs.bufferQueueLimit, 5));
+        if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED) {
+            this.OUTPUT_BUFFER_QUEUE_LIMIT = prefs.bufferQueueLimit;
+            this.MAX_BUFFER_QUEUE_LIMIT = prefs.bufferQueueLimit;
+            this.currentBufferQueueLimit = Math.max(MIN_BUFFER_QUEUE_LIMIT, Math.min(prefs.bufferQueueLimit, 5));
+
+            this.decoderThreadPriority = prefs.decoderThreadPriority;
+            this.codecLowLatency = prefs.codecLowLatency;
+            this.surfaceRenderDelay = prefs.surfaceRenderDelay;
+            this.audioBufferSize = prefs.audioBufferSize;
+            this.networkJitterBuffer = prefs.networkJitterBuffer;
+        }
     }
 
     public boolean isHevcSupported() {
@@ -1114,50 +1127,50 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             return;
         }
 
-        // Update timing metrics
-        lastInputTimeNanos = frameTimeNanos;
-        lastUiThreadTimeNanos = frameTimeNanos;
-        lastDrawCommandTimeNanos = frameTimeNanos;
+        // Only apply latency settings in balanced frame pacing
+        if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED) {
+            // Update timing metrics
+            lastInputTimeNanos = frameTimeNanos;
+            lastUiThreadTimeNanos = frameTimeNanos;
+            lastDrawCommandTimeNanos = frameTimeNanos;
 
-        // Analyze frame timing
-        analyzeFrameTiming(frameTimeNanos);
+            // Analyze frame timing
+            analyzeFrameTiming(frameTimeNanos);
 
-        // Register for next frame callback early to minimize delay
-        Choreographer.getInstance().postFrameCallback(this);
+            // Register for next frame callback early to minimize delay
+            Choreographer.getInstance().postFrameCallback(this);
 
-        // Process frame with dynamic buffer management
-        Integer nextOutputBuffer = outputBufferQueue.poll();
-        if (nextOutputBuffer != null) {
-            try {
-                // Calculate optimal presentation time with vsync alignment
-                long vsyncOffset = activity.getWindowManager().getDefaultDisplay().getAppVsyncOffsetNanos();
-                long frameInterval = frameIntervalNanos;
-                // Apply frame release offset from preferences (in vsync intervals)
-                long offsetNanos = prefs.frameReleaseOffset * frameInterval;
-                long optimalPresentationTime = frameTimeNanos - vsyncOffset + offsetNanos;
-                
-                // In emergency mode, skip frames that are too late
-                if (emergencyMode && (frameTimeNanos - optimalPresentationTime) > FRAME_SKIP_THRESHOLD_NS) {
+            // Process frame with dynamic buffer management
+            Integer nextOutputBuffer = outputBufferQueue.poll();
+            if (nextOutputBuffer != null) {
+                try {
+                    // Calculate optimal presentation time with vsync alignment
+                    long vsyncOffset = activity.getWindowManager().getDefaultDisplay().getAppVsyncOffsetNanos();
+                    long frameInterval = frameIntervalNanos;
+                    // Apply frame release offset from preferences (in vsync intervals)
+                    long offsetNanos = prefs.frameReleaseOffset * frameInterval + prefs.surfaceRenderDelay * 1_000_000L; // add ms delay
+                    long optimalPresentationTime = frameTimeNanos - vsyncOffset + offsetNanos;
+                    // In emergency mode, skip frames that are too late
+                    if (emergencyMode && (frameTimeNanos - optimalPresentationTime) > FRAME_SKIP_THRESHOLD_NS) {
+                        videoDecoder.releaseOutputBuffer(nextOutputBuffer, false);
+                        LimeLog.info("Skipping late frame in emergency mode");
+                    } else {
+                        // Release buffer with optimal timing
+                        videoDecoder.releaseOutputBuffer(nextOutputBuffer, optimalPresentationTime);
+                    }
+                    // Track performance metrics
+                    if (prefs.enablePerfOverlay) {
+                        activeWindowVideoStats.totalFramesRendered++;
+                    }
+                } catch (IllegalStateException e) {
+                    // Minimal error recovery
                     videoDecoder.releaseOutputBuffer(nextOutputBuffer, false);
-                    LimeLog.info("Skipping late frame in emergency mode");
-                } else {
-                    // Release buffer with optimal timing
-                    videoDecoder.releaseOutputBuffer(nextOutputBuffer, optimalPresentationTime);
                 }
-                
-                // Track performance metrics
-                if (prefs.enablePerfOverlay) {
-                    activeWindowVideoStats.totalFramesRendered++;
-                }
-            } catch (IllegalStateException e) {
-                // Minimal error recovery
-                videoDecoder.releaseOutputBuffer(nextOutputBuffer, false);
             }
-        }
-
-        // Essential codec recovery check
-        if (codecRecoveryType.get() != CR_RECOVERY_TYPE_NONE) {
-            doCodecRecoveryIfRequired(CR_FLAG_CHOREOGRAPHER);
+            // Essential codec recovery check
+            if (codecRecoveryType.get() != CR_RECOVERY_TYPE_NONE) {
+                doCodecRecoveryIfRequired(CR_FLAG_CHOREOGRAPHER);
+            }
         }
     }
 
