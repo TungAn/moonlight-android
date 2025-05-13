@@ -612,6 +612,9 @@
     <string name="title_frame_release_offset">Frame Release Offset</string>
     <string name="summary_frame_release_offset">Adjust the timing of frame release relative to vsync (negative = earlier, positive = later, 0 = default)</string>
 
+    <string name="title_vsync_lookahead">VSYNC Lookahead for MAX_SMOOTHNESS</string>
+    <string name="summary_vsync_lookahead">Adjust how many frames ahead to schedule presentation for MAX_SMOOTHNESS mode (1 = lowest latency but risk of stutter, higher = smoother but more latency)</string>
+
     <string name="title_latency_settings">Latency Settings</string>
     <string name="title_decoder_thread_priority">Decoder Thread Priority</string>
     <string name="summary_decoder_thread_priority">Set the CPU priority for the video decoder thread. Higher = faster decoding, but may impact other apps.</string>

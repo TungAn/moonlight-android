@@ -337,6 +337,30 @@ public class StreamSettings extends AppCompatActivity implements SearchPreferenc
             addPreferencesFromResource(R.xml.preferences);
             PreferenceScreen screen = getPreferenceScreen();
 
+            // Make the vsyncLookahead preference visible only when frame pacing is set to MAX_SMOOTHNESS
+            final Preference vsyncLookaheadPref = findPreference("seekbar_vsync_lookahead");
+            final ListPreference framePacingPref = findPreference("frame_pacing");
+            
+            if (vsyncLookaheadPref != null && framePacingPref != null) {
+                // Set initial visibility based on current selection
+                updateVsyncLookaheadVisibility(framePacingPref.getValue(), vsyncLookaheadPref);
+                
+                // Save any existing listener
+                final Preference.OnPreferenceChangeListener existingListener = framePacingPref.getOnPreferenceChangeListener();
+                
+                // Update visibility when frame pacing changes - chain with any existing listener
+                framePacingPref.setOnPreferenceChangeListener(new Preference.OnPreferenceChangeListener() {
+                    @Override
+                    public boolean onPreferenceChange(Preference preference, Object newValue) {
+                        // First update visibility
+                        updateVsyncLookaheadVisibility((String)newValue, vsyncLookaheadPref);
+                        
+                        // Then call the original listener if it exists
+                        return existingListener == null || existingListener.onPreferenceChange(preference, newValue);
+                    }
+                });
+            }
+
             AppCompatActivity activity = (AppCompatActivity) requireActivity();
             PackageManager pm = activity.getPackageManager();
 
@@ -1060,6 +1084,11 @@ public class StreamSettings extends AppCompatActivity implements SearchPreferenc
                 return null;
             }
             return file1;
+        }
+
+        private void updateVsyncLookaheadVisibility(String framePacingValue, Preference vsyncLookaheadPref) {
+            // Only show vsyncLookahead when using MAX_SMOOTHNESS frame pacing mode
+            vsyncLookaheadPref.setVisible("smoothness".equals(framePacingValue));
         }
     }
 }

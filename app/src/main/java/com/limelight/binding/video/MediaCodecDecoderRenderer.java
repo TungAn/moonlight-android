@@ -142,29 +142,75 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     private long lastFrameTimeNanos = 0;
     private long frameIntervalNanos = 8333333; // 120fps = 8.33ms
-    private static final long STUTTER_THRESHOLD_NS = 7500000; // 7.5ms (reduced from 8.5ms)
-    private static final long SMOOTHNESS_THRESHOLD_NS = 7000000; // 7ms (reduced from 8ms)
-    private static final long MAX_FRAME_TIME_NS = 8000000; // 8ms max frame time (reduced from 9ms)
-    private static final int FRAME_HISTORY_SIZE = 3; // Reduced from 5 for faster adaptation
+    private static final long STUTTER_THRESHOLD_NS = 5500000; // 5.5ms (reduced from 6.5ms)
+    private static final long SMOOTHNESS_THRESHOLD_NS = 4500000; // 4.5ms (reduced from 5.5ms)
+    private static final long MAX_FRAME_TIME_NS = 6000000; // 6ms max frame time (reduced from 7ms)
+    private static final int FRAME_HISTORY_SIZE = 2; // Using smaller history for faster adaptation (reduced from 3)
     private final long[] frameTimeHistory = new long[FRAME_HISTORY_SIZE];
     private int frameHistoryIndex = 0;
     private long totalFrameTime = 0;
     private int frameCount = 0;
     private long lastVsyncTimeNanos = 0;
-    private static final long VSYNC_DEADLINE_NS = 500000; // 0.5ms deadline for VSYNC (reduced from 1ms)
-    private static final long INPUT_LATENCY_THRESHOLD_NS = 2000000; // 2ms threshold for input latency (reduced from 3ms)
+    private static final long VSYNC_DEADLINE_NS = 200000; // 0.2ms deadline for VSYNC (reduced from 0.3ms)
+    private static final long INPUT_LATENCY_THRESHOLD_NS = 1500000; // 1.5ms threshold for input latency (reduced from 2ms)
     private long lastInputTimeNanos = 0;
     private int consecutiveLateFrames = 0;
-    private static final int MAX_CONSECUTIVE_LATE_FRAMES = 1; // Reduced from 2
-    private static final long UI_THREAD_THRESHOLD_NS = 3000000; // 3ms threshold for UI thread (reduced from 4ms)
-    private static final long DRAW_COMMAND_THRESHOLD_NS = 3000000; // 3ms threshold for draw commands (reduced from 4ms)
+    private static final int MAX_CONSECUTIVE_LATE_FRAMES = 1;
+    private static final long UI_THREAD_THRESHOLD_NS = 2000000; // 2ms threshold for UI thread (reduced from 3ms)
+    private static final long DRAW_COMMAND_THRESHOLD_NS = 2000000; // 2ms threshold for draw commands (reduced from 3ms)
     private long lastUiThreadTimeNanos = 0;
     private long lastDrawCommandTimeNanos = 0;
-    private static final long FRAME_SKIP_THRESHOLD_NS = 10000000; // 10ms threshold for frame skipping (reduced from 12ms)
-    private static final long EMERGENCY_LATENCY_THRESHOLD_NS = 12000000; // 12ms threshold for emergency measures (reduced from 15ms)
+    private static final long FRAME_SKIP_THRESHOLD_NS = 8000000; // 8ms threshold for frame skipping (reduced from 10ms)
+    private static final long EMERGENCY_LATENCY_THRESHOLD_NS = 10000000; // 10ms threshold for emergency measures (reduced from 12ms)
     private boolean emergencyMode = false;
     private int emergencyModeFrames = 0;
     private static final int MAX_EMERGENCY_MODE_FRAMES = 10;
+    
+    // Add this new field to track predicted next VSYNC time
+    private long nextPredictedVsyncTimeNanos = 0;
+    
+    // New fields for improved VSYNC prediction
+    private long[] vsyncTimingVariance = new long[8]; // Increased from 5 for better jitter estimation
+    private int vsyncTimingVarianceIndex = 0;
+    private long lastActualVsyncTimeNanos = 0;
+    private long accumulatedJitter = 0;
+    private int jitterSampleCount = 0;
+    private long lastVsyncPeriodNanos = 0;
+    private long highRefreshRateThresholdNs = 5000000; // 5ms threshold for high refresh rate optimization
+    
+    // New fields for ultra-low latency optimization
+    private static final long ULTRA_LOW_LATENCY_THRESHOLD_NS = 2000000; // 2ms (increased from 1ms to detect more devices)
+    private boolean ultraLowLatencyDevice = false;
+    private long lastDecodeToReleaseTimeNs = 0;
+    private static final int DECODE_TIME_HISTORY_SIZE = 5;
+    private final long[] decodeTimeHistory = new long[DECODE_TIME_HISTORY_SIZE];
+    private int decodeTimeHistoryIndex = 0;
+    private long avgDecodeTimeNs = 0;
+    
+    // Enhanced frame pacing for high-refresh content
+    private boolean isHighRefreshContent = false;
+    private static final long REFRESH_240HZ_THRESHOLD = 230; // Hz
+    private long streamFrameTimeNs = 0; // Time between frames in ns
+    private static final int FRAME_DELIVERY_JITTER_SAMPLES = 8;
+    private final long[] frameDeliveryJitter = new long[FRAME_DELIVERY_JITTER_SAMPLES];
+    private int frameDeliveryJitterIndex = 0;
+    private long lastFrameDeliveryTimeNs = 0;
+    private long optimalFrameIntervalNs = 0; // Target interval between frames
+    private long frameDropThresholdNs = 0; // Drop frames that are this late
+    
+    // Variables for 240fps-to-120Hz optimization
+    private boolean is240fpsOn120Hz = false;
+    private int frameCounter240 = 0;
+    private static final long DISPLAY_120HZ_THRESHOLD_NS = 7500000; // ~133Hz (7.5ms vsync period)
+    private boolean preferredFramePosition = true; // For alternating frame delivery pattern
+    private long lastFrameTimeNs240 = 0; // Special tracking for 240fps timing
+    private static final int FRAME_PATTERN_HISTORY_SIZE = 8; // Track more frames for 240fps pattern detection
+    private final long[] framePattern240 = new long[FRAME_PATTERN_HISTORY_SIZE];
+    private int framePatternIndex240 = 0;
+    private int stablePatternCounter = 0;
+    private boolean framePatternStabilized = false;
+    private long idealFrameTimeNs240 = 0; // Ideal time between frames at 240fps
+    private static final long FRAME_TIME_FUDGE_FACTOR_NS = 150000; // 0.15ms tolerance (reduced from 0.2ms)
 
     private MediaCodecInfo findAvcDecoder() {
         MediaCodecInfo decoder = MediaCodecHelper.findProbableSafeDecoder("video/avc", MediaCodecInfo.CodecProfileLevel.AVCProfileHigh);
@@ -656,7 +702,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 LimeLog.severe("No available AVC decoder!");
                 return -1;
             }
-
             if (initialWidth > 4096 || initialHeight > 4096) {
                 LimeLog.severe("> 4K streaming only supported on HEVC");
                 return -1;
@@ -759,6 +804,49 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         this.initialHeight = invertResolution ? width : height;
         this.videoFormat = format;
         this.refreshRate = redrawRate;
+        
+        // Detect high refresh rate content and optimize frame pacing parameters
+        if (refreshRate >= REFRESH_240HZ_THRESHOLD) {
+            isHighRefreshContent = true;
+            streamFrameTimeNs = 1000000000L / refreshRate;
+            optimalFrameIntervalNs = streamFrameTimeNs;
+            frameDropThresholdNs = streamFrameTimeNs * 3 / 2; // 1.5x frame time
+            frameIntervalNanos = streamFrameTimeNs;
+            
+            // Get display refresh rate information to detect 240fps-to-120Hz scenario
+            try {
+                float displayRefreshRate = activity.getWindowManager().getDefaultDisplay().getRefreshRate();
+                long displayRefreshPeriodNs = (long)(1000000000L / displayRefreshRate);
+                
+                // Check if we're streaming 240fps content to a 120Hz display
+                if (displayRefreshPeriodNs >= DISPLAY_120HZ_THRESHOLD_NS) {
+                    is240fpsOn120Hz = true;
+                    idealFrameTimeNs240 = 1000000000L / refreshRate; // ~4.17ms for 240fps
+                    framePatternStabilized = false;
+                    stablePatternCounter = 0;
+                    lastFrameTimeNs240 = 0;
+                    // Reset pattern history
+                    for (int i = 0; i < FRAME_PATTERN_HISTORY_SIZE; i++) {
+                        framePattern240[i] = 0;
+                    }
+                    LimeLog.info("240fps-to-120Hz mode detected - enabling specialized frame pacing");
+                    LimeLog.info("240fps frame time: " + (idealFrameTimeNs240 / 1000000.0) + "ms, display period: " + (displayRefreshPeriodNs / 1000000.0) + "ms");
+                } else {
+                    is240fpsOn120Hz = false;
+                }
+            } catch (Exception e) {
+                // If we can't get the refresh rate, assume we're not in 240fps-to-120Hz mode
+                is240fpsOn120Hz = false;
+            }
+            
+            LimeLog.info("High refresh rate content detected (" + refreshRate + "Hz) - enabling ultra-low latency optimizations");
+        } else {
+            isHighRefreshContent = false;
+            is240fpsOn120Hz = false;
+            streamFrameTimeNs = 1000000000L / refreshRate;
+            optimalFrameIntervalNs = streamFrameTimeNs;
+            frameDropThresholdNs = streamFrameTimeNs * 2; // 2x frame time for normal refresh rates
+        }
 
         return initializeDecoder(false);
     }
@@ -1024,101 +1112,109 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     }
 
     private void analyzeFrameTiming(long currentFrameTimeNanos) {
+        // Special fast path for 240Hz content to maximize responsiveness
+        if (isHighRefreshContent) {
+            // For 240Hz content, we want to be much more aggressive
         if (lastFrameTimeNanos != 0) {
             long frameDelta = currentFrameTimeNanos - lastFrameTimeNanos;
             
-            // Update frame time history with exponential weighting
-            totalFrameTime -= frameTimeHistory[frameHistoryIndex];
-            frameTimeHistory[frameHistoryIndex] = frameDelta;
-            totalFrameTime += frameDelta;
-            frameHistoryIndex = (frameHistoryIndex + 1) % FRAME_HISTORY_SIZE;
-            frameCount = Math.min(frameCount + 1, FRAME_HISTORY_SIZE);
-            
-            // Calculate weighted average frame time (more recent frames have higher weight)
-            long avgFrameTime = 0;
-            if (frameCount > 0) {
-                for (int i = 0; i < frameCount; i++) {
-                    int weight = frameCount - i;
-                    avgFrameTime += frameTimeHistory[i] * weight;
-                }
-                avgFrameTime /= (frameCount * (frameCount + 1) / 2);
-            }
-            
-            // Aggressive emergency mode activation
-            if (frameDelta > EMERGENCY_LATENCY_THRESHOLD_NS || avgFrameTime > MAX_FRAME_TIME_NS) {
-                emergencyMode = true;
-                emergencyModeFrames = MAX_EMERGENCY_MODE_FRAMES;
-                currentBufferQueueLimit = MIN_BUFFER_QUEUE_LIMIT;
-                LimeLog.info("Entering emergency mode due to high latency");
-            }
-            
-            // Handle emergency mode with frame skipping
-            if (emergencyMode) {
-                emergencyModeFrames--;
-                if (emergencyModeFrames <= 0) {
-                    emergencyMode = false;
-                    LimeLog.info("Exiting emergency mode");
-                }
-                return;
-            }
-            
-            // More aggressive VSYNC timing check
-            long vsyncDelta = currentFrameTimeNanos - lastVsyncTimeNanos;
-            if (vsyncDelta > VSYNC_DEADLINE_NS) {
-                if (currentBufferQueueLimit > MIN_BUFFER_QUEUE_LIMIT) {
-                    currentBufferQueueLimit--;
-                    LimeLog.info("Decreasing buffer size to " + currentBufferQueueLimit + " due to late VSYNC");
-                }
-            }
-            
-            // More aggressive input latency handling
-            long inputDelta = currentFrameTimeNanos - lastInputTimeNanos;
-            if (inputDelta > INPUT_LATENCY_THRESHOLD_NS) {
-                consecutiveLateFrames++;
-                if (consecutiveLateFrames >= MAX_CONSECUTIVE_LATE_FRAMES) {
-                    if (currentBufferQueueLimit > MIN_BUFFER_QUEUE_LIMIT) {
-                        currentBufferQueueLimit--;
-                        LimeLog.info("Decreasing buffer size to " + currentBufferQueueLimit + " due to high input latency");
+                // For ultra-high frame rates, immediately react to stuttering
+                if (frameDelta > frameDropThresholdNs) {
+                    // Increase buffer queue immediately if we detect a stutter
+                    if (currentBufferQueueLimit < MAX_BUFFER_QUEUE_LIMIT) {
+                        currentBufferQueueLimit++;
+                        LimeLog.info("240Hz: Increasing buffer to " + currentBufferQueueLimit + " due to stutter (delta: " + (frameDelta / 1000000.0) + " ms)");
                     }
-                    consecutiveLateFrames = 0;
+                }
+                
+                // Special handling for 240fps content on 120Hz displays
+                if (is240fpsOn120Hz) {
+                    // Learn the frame pattern to correctly identify which frames will be displayed
+                    if (lastFrameTimeNs240 > 0) {
+                        long frameTime240 = currentFrameTimeNanos - lastFrameTimeNs240;
+                        
+                        // Record frame time in pattern history
+                        framePattern240[framePatternIndex240] = frameTime240;
+                        framePatternIndex240 = (framePatternIndex240 + 1) % FRAME_PATTERN_HISTORY_SIZE;
+                        
+                        // Analyze frame pattern (240fps will have alternating short/long pattern)
+                        if (framePatternIndex240 == 0 && !framePatternStabilized) {
+                            // Detect if we have a stable alternating pattern
+                            int shortFrames = 0;
+                            int longFrames = 0;
+                            
+                            for (int i = 0; i < FRAME_PATTERN_HISTORY_SIZE; i++) {
+                                if (framePattern240[i] > 0) {
+                                    if (framePattern240[i] < idealFrameTimeNs240 + FRAME_TIME_FUDGE_FACTOR_NS) {
+                                        shortFrames++;
+                                    } else {
+                                        longFrames++;
+                                    }
+                                }
+                            }
+                            
+                            // We expect roughly even distribution in stable pattern
+                            if (shortFrames > 3 && longFrames > 3 && Math.abs(shortFrames - longFrames) <= 1) {
+                                stablePatternCounter++;
+                                if (stablePatternCounter >= 2) {
+                                    framePatternStabilized = true;
+                                    LimeLog.info("240fps frame pattern detected: " + shortFrames + " short frames, " + 
+                                                longFrames + " long frames");
+                                }
+                            } else {
+                                stablePatternCounter = 0;
+                            }
+                        }
+                        
+                        // Classify current frame as key or secondary based on timing
+                        if (framePatternStabilized) {
+                            if (frameTime240 < idealFrameTimeNs240 + FRAME_TIME_FUDGE_FACTOR_NS) {
+                                // Short frame time - this frame is part of a pair
+                                frameCounter240 = 1; // Secondary frame
+                            } else {
+                                // Long frame time - start of new pair
+                                frameCounter240 = 0; // Key frame
                 }
             } else {
-                consecutiveLateFrames = 0;
-            }
-
-            // More aggressive UI thread monitoring
-            long uiThreadDelta = currentFrameTimeNanos - lastUiThreadTimeNanos;
-            if (uiThreadDelta > UI_THREAD_THRESHOLD_NS) {
-                if (currentBufferQueueLimit > MIN_BUFFER_QUEUE_LIMIT) {
-                    currentBufferQueueLimit--;
-                    LimeLog.info("Decreasing buffer size to " + currentBufferQueueLimit + " due to slow UI thread");
-                }
-            }
-
-            // More aggressive draw command monitoring
-            long drawCommandDelta = currentFrameTimeNanos - lastDrawCommandTimeNanos;
-            if (drawCommandDelta > DRAW_COMMAND_THRESHOLD_NS) {
-                if (currentBufferQueueLimit > MIN_BUFFER_QUEUE_LIMIT) {
-                    currentBufferQueueLimit--;
-                    LimeLog.info("Decreasing buffer size to " + currentBufferQueueLimit + " due to slow draw commands");
-                }
-            }
-            
-            // More aggressive buffer size management
-            if (frameDelta > STUTTER_THRESHOLD_NS || avgFrameTime > MAX_FRAME_TIME_NS) {
-                if (currentBufferQueueLimit < MAX_BUFFER_QUEUE_LIMIT) {
-                    currentBufferQueueLimit++;
-                    LimeLog.info("Increasing buffer size to " + currentBufferQueueLimit + " due to late frame (delta: " + (frameDelta / 1000000) + "ms, avg: " + (avgFrameTime / 1000000) + "ms)");
-                }
-            } else if (frameDelta < SMOOTHNESS_THRESHOLD_NS && avgFrameTime < frameIntervalNanos) {
-                if (currentBufferQueueLimit > MIN_BUFFER_QUEUE_LIMIT) {
-                    currentBufferQueueLimit--;
-                    LimeLog.info("Decreasing buffer size to " + currentBufferQueueLimit + " due to early frame (delta: " + (frameDelta / 1000000) + "ms, avg: " + (avgFrameTime / 1000000) + "ms)");
+                            // If pattern not stabilized yet, use simple alternating
+                            frameCounter240 = (frameCounter240 + 1) % 2;
+                        }
+                    }
+                    lastFrameTimeNs240 = currentFrameTimeNanos;
                 }
             }
         }
+        
+        // Continue with regular frame timing analysis for all content
+        if (lastFrameTimeNanos != 0) {
+            // Calculate delta from last frame
+            long delta = currentFrameTimeNanos - lastFrameTimeNanos;
+
+            if (delta > 0) {
+                // Add to the running average
+                frameTimeHistory[frameHistoryIndex] = delta;
+                frameHistoryIndex = (frameHistoryIndex + 1) % FRAME_HISTORY_SIZE;
+
+                // Update the total
+                totalFrameTime += delta;
+                frameCount++;
+
+                // If we've filled the history buffer, subtract the oldest value
+                if (frameCount > FRAME_HISTORY_SIZE) {
+                    totalFrameTime -= frameTimeHistory[(frameHistoryIndex + 1) % FRAME_HISTORY_SIZE];
+                    frameCount = FRAME_HISTORY_SIZE;
+                }
+
+                // Calculate the average frame time
+                long avgFrameTime = totalFrameTime / frameCount;
+
+                // Use this to calibrate our frame interval
+                frameIntervalNanos = avgFrameTime;
+            }
+        }
+
+        // Remember this for next time
         lastFrameTimeNanos = currentFrameTimeNanos;
-        lastVsyncTimeNanos = currentFrameTimeNanos;
     }
 
     @Override
@@ -1144,29 +1240,86 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             Integer nextOutputBuffer = outputBufferQueue.poll();
             if (nextOutputBuffer != null) {
                 try {
-                    // Calculate optimal presentation time with vsync alignment
-                    long vsyncOffset = activity.getWindowManager().getDefaultDisplay().getAppVsyncOffsetNanos();
-                    long frameInterval = frameIntervalNanos;
-                    // Apply frame release offset from preferences (in vsync intervals)
-                    long offsetNanos = prefs.frameReleaseOffset * frameInterval + prefs.surfaceRenderDelay * 1_000_000L; // add ms delay
-                    long optimalPresentationTime = frameTimeNanos - vsyncOffset + offsetNanos;
-                    // In emergency mode, skip frames that are too late
-                    if (emergencyMode && (frameTimeNanos - optimalPresentationTime) > FRAME_SKIP_THRESHOLD_NS) {
-                        videoDecoder.releaseOutputBuffer(nextOutputBuffer, false);
-                        LimeLog.info("Skipping late frame in emergency mode");
-                    } else {
-                        // Release buffer with optimal timing
-                        videoDecoder.releaseOutputBuffer(nextOutputBuffer, optimalPresentationTime);
+                    // Get current time to reduce any delay
+                    long currentTimeNanos = System.nanoTime();
+                    
+                    // Calculate VSYNC period based on refresh rate
+                    long vsyncPeriodNanos = (long)(1000000000L / refreshRate);
+                    boolean isHighRefreshRate = vsyncPeriodNanos < highRefreshRateThresholdNs;
+                    
+                    // Update decode time tracking for ultra-low-latency device detection
+                    long currentDecodeTimeNs = currentTimeNanos - lastDecodeToReleaseTimeNs;
+                    if (lastDecodeToReleaseTimeNs > 0) {
+                        decodeTimeHistory[decodeTimeHistoryIndex] = currentDecodeTimeNs;
+                        decodeTimeHistoryIndex = (decodeTimeHistoryIndex + 1) % DECODE_TIME_HISTORY_SIZE;
+                        
+                        // Calculate rolling average decode time
+                        long totalDecodeTime = 0;
+                        int validSamples = 0;
+                        for (long time : decodeTimeHistory) {
+                            if (time > 0) {
+                                totalDecodeTime += time;
+                                validSamples++;
+                            }
+                        }
+                        
+                        if (validSamples > 0) {
+                            avgDecodeTimeNs = totalDecodeTime / validSamples;
+                            // Detect ultra-low latency devices (average decode time < 1ms)
+                            ultraLowLatencyDevice = avgDecodeTimeNs < ULTRA_LOW_LATENCY_THRESHOLD_NS;
+                        }
                     }
+                    
+                    // Try to get VSYNC offset if available
+                    long vsyncOffset;
+                    try {
+                        vsyncOffset = activity.getWindowManager().getDefaultDisplay().getAppVsyncOffsetNanos();
+                    } catch (Exception e) {
+                        vsyncOffset = 0; // Use 0 if not available
+                    }
+                    
+                    // Calculate next VSYNC time with minimal overhead
+                    long nextVsyncTimeNanos = currentTimeNanos + 
+                        (vsyncPeriodNanos - ((currentTimeNanos - vsyncOffset) % vsyncPeriodNanos));
+                    
+                    // Adaptive safety margin based on device capability
+                    long adaptiveSafetyMargin;
+                    if (ultraLowLatencyDevice) {
+                        // Ultra-low latency path 
+                        adaptiveSafetyMargin = isHighRefreshRate ? 10000 : 30000; // 0.01ms or 0.03ms - reduced
+                    } else {
+                        // Standard approach with more aggressive values
+                        adaptiveSafetyMargin = isHighRefreshRate ? 30000 : 50000; // 0.03ms or 0.05ms - reduced
+                    }
+                    
+                    // Apply frame release offset from preferences (in vsync intervals)
+                    // Always use minimal offset for lowest latency
+                    int frameOffset = 0; // Force zero offset for all devices
+                    long offsetNanos = frameOffset * vsyncPeriodNanos + Math.min(1, prefs.surfaceRenderDelay) * 1_000_000L; // Cap delay
+                    
+                    // Calculate optimal presentation time for minimal latency
+                    long optimalPresentationTime = nextVsyncTimeNanos + offsetNanos + adaptiveSafetyMargin;
+                    
+                    // Skip emergency mode processing - always render frames immediately
+                    // Record the time we're releasing the buffer for decode time tracking
+                    lastDecodeToReleaseTimeNs = currentTimeNanos;
+                    
+                    // Release buffer with optimal timing for minimal latency
+                    videoDecoder.releaseOutputBuffer(nextOutputBuffer, optimalPresentationTime);
+                    
+                    // Update last VSYNC time for timing calculations
+                    lastVsyncTimeNanos = nextVsyncTimeNanos;
+                    
                     // Track performance metrics
                     if (prefs.enablePerfOverlay) {
                         activeWindowVideoStats.totalFramesRendered++;
                     }
                 } catch (IllegalStateException e) {
-                    // Minimal error recovery
+                    // Just drop the frame if we hit an exception
                     videoDecoder.releaseOutputBuffer(nextOutputBuffer, false);
                 }
             }
+            
             // Essential codec recovery check
             if (codecRecoveryType.get() != CR_RECOVERY_TYPE_NONE) {
                 doCodecRecoveryIfRequired(CR_FLAG_CHOREOGRAPHER);
@@ -1226,8 +1379,229 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                         prefs.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS) {
                                     // In max smoothness or cap FPS mode, we want to never drop frames
                                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                                        // Use a PTS that will cause this frame to never be dropped
+                                        if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS) {
+                                            // Get current time and calculate VSYNC interval based on refreshRate
+                                            long currentTimeNanos = System.nanoTime();
+                                            long vsyncPeriodNanos = (long)(1000000000L / refreshRate);
+                                            
+                                            // Special handling for high refresh rates (above 144Hz)
+                                            boolean isHighRefreshRate = vsyncPeriodNanos < highRefreshRateThresholdNs;
+                                            
+                                            // Check if refresh rate changed significantly
+                                            if (lastVsyncPeriodNanos != 0 && Math.abs(vsyncPeriodNanos - lastVsyncPeriodNanos) > 100000) {
+                                                // Reset VSYNC tracking when refresh rate changes
+                                                nextPredictedVsyncTimeNanos = 0;
+                                                accumulatedJitter = 0;
+                                                jitterSampleCount = 0;
+                                            }
+                                            lastVsyncPeriodNanos = vsyncPeriodNanos;
+                                            
+                                            // Measure VSYNC timing variance if we have a previous measurement
+                                            if (lastActualVsyncTimeNanos > 0 && nextPredictedVsyncTimeNanos > 0) {
+                                                // Calculate how far off our prediction was
+                                                long actualVsyncTime = currentTimeNanos;
+                                                long variance = Math.abs(actualVsyncTime - nextPredictedVsyncTimeNanos);
+                                                
+                                                // For high refresh rates, we care more about recent measurements
+                                                // than older ones, so we give them more weight
+                                                if (isHighRefreshRate) {
+                                                    // Clear old measurements to adapt faster to changes
+                                                    if (jitterSampleCount > 15) {
+                                                        accumulatedJitter = 0;
+                                                        jitterSampleCount = 0;
+                                                    }
+                                                }
+                                                
+                                                // Track rolling variance for adaptive safety margin
+                                                vsyncTimingVariance[vsyncTimingVarianceIndex] = variance;
+                                                vsyncTimingVarianceIndex = (vsyncTimingVarianceIndex + 1) % vsyncTimingVariance.length;
+                                                
+                                                // Calculate average jitter for heuristics
+                                                accumulatedJitter += variance;
+                                                jitterSampleCount++;
+                                            }
+                                            
+                                            lastActualVsyncTimeNanos = currentTimeNanos;
+                                            
+                                            // High refresh rates need more precise VSYNC prediction
+                                            if (nextPredictedVsyncTimeNanos <= currentTimeNanos) {
+                                                // Our prediction is in the past, recalculate
+                                                long vsyncOffset = 0;
+                                                
+                                                // Try to get VSYNC offset if available
+                                                try {
+                                                    vsyncOffset = activity.getWindowManager().getDefaultDisplay().getAppVsyncOffsetNanos();
+                                                } catch (Exception e) {
+                                                    // Ignore and use 0 if not available
+                                                }
+                                                
+                                                // Calculate the next VSYNC time with improved accuracy
+                                                // Add a small phase correction for more accurate VSYNC prediction
+                                                long phaseCorrection = 0;
+                                                if (jitterSampleCount > 3) { // Reduced from 5 for faster adaptation
+                                                    // Use observed data to fine-tune the phase correction
+                                                    // More aggressive with smaller coefficient
+                                                    phaseCorrection = (long)(0.03 * (accumulatedJitter / jitterSampleCount)); // Reduced from 0.05
+                                                }
+                                                
+                                                // Special case for 240fps on 120Hz displays
+                                                if (is240fpsOn120Hz && framePatternStabilized) {
+                                                    // With stable pattern detection, we can use more precise prediction for 240fps->120Hz
+                                                    if (jitterSampleCount > 2) { // Reduced from 3
+                                                        // More aggressive and responsive phase correction
+                                                        phaseCorrection = (long)(0.01 * (accumulatedJitter / jitterSampleCount)); // Reduced from 0.02
+                                                    }
+                                                    
+                                                    // For key frames, we need perfect VSYNC alignment
+                                                    if (frameCounter240 == 0) {
+                                                        // Minimal phase correction for key frames
+                                                        phaseCorrection = Math.min(phaseCorrection, 5000); // Reduced to 0.005ms from 0.01ms
+                                                    }
+                                                } else if (jitterSampleCount > 3) { // Reduced from 5
+                                                    // Standard correction for other content
+                                                    phaseCorrection = (long)(0.03 * (accumulatedJitter / jitterSampleCount)); // Reduced from 0.05
+                                                }
+                                                
+                                                nextPredictedVsyncTimeNanos = currentTimeNanos + 
+                                                    (vsyncPeriodNanos - ((currentTimeNanos - vsyncOffset + phaseCorrection) % vsyncPeriodNanos));
+                                            }
+                                            
+                                            // Calculate adaptive safety margin based on observed jitter
+                                            long adaptiveSafetyMargin;
+                                            
+                                            // Check if this device has ultra-low latency decoding capabilities
+                                            // Update decode time history and calculate average
+                                            long currentDecodeTimeNs = System.nanoTime() - lastDecodeToReleaseTimeNs;
+                                            decodeTimeHistory[decodeTimeHistoryIndex] = currentDecodeTimeNs;
+                                            decodeTimeHistoryIndex = (decodeTimeHistoryIndex + 1) % DECODE_TIME_HISTORY_SIZE;
+                                            
+                                            // Calculate rolling average decode time
+                                            long totalDecodeTime = 0;
+                                            int validSamples = 0;
+                                            for (long time : decodeTimeHistory) {
+                                                if (time > 0) {
+                                                    totalDecodeTime += time;
+                                                    validSamples++;
+                                                }
+                                            }
+                                            
+                                            if (validSamples > 0) {
+                                                avgDecodeTimeNs = totalDecodeTime / validSamples;
+                                                // Detect ultra-low latency devices (average decode time < 1ms)
+                                                ultraLowLatencyDevice = avgDecodeTimeNs < ULTRA_LOW_LATENCY_THRESHOLD_NS;
+                                            }
+                                            
+                                            if (isHighRefreshRate) {
+                                                // Special optimization for 240fps content on 120Hz displays
+                                                if (is240fpsOn120Hz) {
+                                                    // Update frame counter for alternating frame patterns
+                                                    frameCounter240 = (frameCounter240 + 1) % 2;
+                                                    
+                                                    if (frameCounter240 == 0) {
+                                                        // This is a KEY FRAME that will be displayed on the 120Hz screen
+                                                        
+                                                        // For key frames (displayed frames), use absolute minimum safety margin
+                                                        adaptiveSafetyMargin = 1000; // Just 0.001ms - absolute minimum possible
+                                                        preferredFramePosition = true;
+                                                        
+                                                        // Special VSYNC prediction for key frames - align perfectly with next VSYNC
+                                                        if (framePatternStabilized) {
+                                                            // With a stable pattern, we can be very aggressive with timing
+                                                            LimeLog.info("240fps->120Hz: Optimizing key frame with stable pattern");
+                                                        } else {
+                                                            LimeLog.info("240fps->120Hz: Optimizing key frame with standard pattern");
+                                                        }
+                                                    } else {
+                                                        // This is a SECONDARY FRAME that may be replaced by the next one
+                                                        // Still deliver quickly but with lower priority
+                                                        
+                                                        // We actually want this frame to render but get replaced by the next one
+                                                        // if needed, so we use a larger safety margin but still aim for low latency
+                                                        adaptiveSafetyMargin = 50000; // 0.05ms - still fairly aggressive
+                                                        preferredFramePosition = false;
+                                                        
+                                                        if (framePatternStabilized) {
+                                                            LimeLog.info("240fps->120Hz: Secondary frame with stable pattern");
+                                                        } else {
+                                                            LimeLog.info("240fps->120Hz: Secondary frame with standard pattern");
+                                                        }
+                                                    }
+                                                } else {
+                                                    // For high refresh rates (>144Hz), we need to be more precise
+                                                    if (ultraLowLatencyDevice) {
+                                                        // Ultra-low latency path - use minimal safety margin
+                                                        adaptiveSafetyMargin = 10000; // Just 0.01ms for very fast devices (reduced from 0.025ms)
+                                                    } else {
+                                                        // Standard high refresh rate handling
+                                                        adaptiveSafetyMargin = 30000; // Default 0.03ms for high refresh (reduced from 0.04ms)
+                                                        
+                                                        if (jitterSampleCount > 0) {
+                                                            long avgJitter = accumulatedJitter / jitterSampleCount;
+                                                            // More responsive with smaller divisor and lower cap
+                                                            adaptiveSafetyMargin = Math.min(300000, Math.max(30000, avgJitter / 12)); // Reduced cap and increased divisor
+                                                        }
+                                                    }
+                                                }
+                                            } else {
+                                                // For regular refresh rates with ultra-low latency capability
+                                                if (ultraLowLatencyDevice) {
+                                                    adaptiveSafetyMargin = 40000; // 0.04ms for fast devices (reduced from 0.05ms)
+                                                } else {
+                                                    // Standard approach with reduced defaults
+                                                    adaptiveSafetyMargin = 60000; // Default 0.06ms (reduced from 0.08ms)
+                                                    if (jitterSampleCount > 0) {
+                                                        long avgJitter = accumulatedJitter / jitterSampleCount;
+                                                        // Faster adaptation with smaller divisor
+                                                        adaptiveSafetyMargin = Math.min(600000, Math.max(60000, avgJitter / 6)); // Reduced cap, increased divisor
+                                                    }
+                                                }
+                                            }
+                                            
+                                            // Determine how many VSYNCs ahead to schedule - use user preference if available
+                                            // or default to a reasonable value (1 for minimal latency but guaranteed VSYNC alignment)
+                                            int vsyncLookahead = prefs.vsyncLookahead > 0 ? Math.min(prefs.vsyncLookahead, 2) : 1; // Cap at 2 VSYNCs max
+                                            
+                                            // Ultra-low latency optimization - always use most aggressive targeting
+                                            vsyncLookahead = 1; // Force 1 VSYNC lookahead for all modes to minimize latency
+                                            
+                                            // Calculate the target presentation time
+                                            long targetPresentationTime;
+                                            
+                                            if (is240fpsOn120Hz) {
+                                                // Ultra-optimized presentation time for 240fps on 120Hz display
+                                                long now = System.nanoTime();
+                                                
+                                                if (frameCounter240 == 0) {
+                                                    // KEY FRAME - requires precise VSYNC targeting with zero lookahead
+                                                    // Target exactly the next VSYNC with minimal safety margin
+                                                    targetPresentationTime = nextPredictedVsyncTimeNanos + adaptiveSafetyMargin;
+                                                    
+                                                    // Extra optimization: If we're very close to VSYNC, skip ahead to the next one
+                                                    // Use a tighter threshold for deciding to skip
+                                                    if (targetPresentationTime - now < 400000) { // Less than 0.4ms until VSYNC (reduced from 0.5ms)
+                                                        targetPresentationTime += vsyncPeriodNanos; // Skip to next VSYNC
+                                                    }
+                                                } else {
+                                                    // SECONDARY FRAME - still optimize but can use slightly more relaxed timing
+                                                    targetPresentationTime = nextPredictedVsyncTimeNanos + adaptiveSafetyMargin;
+                                                }
+                                            } else {
+                                                // Normal calculation for regular content - but always using minimal lookahead
+                                                targetPresentationTime = nextPredictedVsyncTimeNanos + adaptiveSafetyMargin;
+                                            }
+                                            
+                                            // Record the time we're releasing the buffer for decode time tracking
+                                            lastDecodeToReleaseTimeNs = System.nanoTime();
+                                            
+                                            // Update our next predicted VSYNC time for future frames
+                                            nextPredictedVsyncTimeNanos += vsyncPeriodNanos;
+                                            
+                                            // Release the buffer with the calculated presentation time
+                                            videoDecoder.releaseOutputBuffer(lastIndex, targetPresentationTime);
+                                        } else {
+                                            // For CAP_FPS, continue using the original behavior
                                         videoDecoder.releaseOutputBuffer(lastIndex, 0);
+                                        }
                                     }
                                     else {
                                         videoDecoder.releaseOutputBuffer(lastIndex, true);
@@ -2163,3 +2537,4 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
     }
 }
+

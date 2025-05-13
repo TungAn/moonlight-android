@@ -195,6 +195,20 @@
             seekbar:min="-5"
             seekbar:step="1" />
 
+        <com.limelight.preferences.SeekBarPreference
+            android:defaultValue="1"
+            android:dialogMessage="@string/summary_vsync_lookahead"
+            android:key="seekbar_vsync_lookahead"
+            android:max="5"
+            android:summary="@string/summary_vsync_lookahead"
+            android:text="frames"
+            android:title="@string/title_vsync_lookahead"
+            app:iconSpaceReserved="false"
+            seekbar:divisor="1"
+            seekbar:keyStep="1"
+            seekbar:min="1"
+            seekbar:step="1" />
+
         <!-- Latency Settings Section -->
         <PreferenceCategory
             android:title="@string/title_latency_settings">

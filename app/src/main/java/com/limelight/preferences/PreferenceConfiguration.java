@@ -338,6 +338,10 @@ public class PreferenceConfiguration {
 
     public int frameReleaseOffset = -1;
 
+    private static final String VSYNC_LOOKAHEAD_PREF_STRING = "seekbar_vsync_lookahead";
+    
+    public int vsyncLookahead = 1;
+
     private static final String DECODER_THREAD_PRIORITY_PREF_STRING = "seekbar_decoder_thread_priority";
     private static final String CODEC_LOW_LATENCY_PREF_STRING = "switch_codec_low_latency";
     private static final String SURFACE_RENDER_DELAY_PREF_STRING = "seekbar_surface_render_delay";
@@ -935,6 +939,8 @@ public class PreferenceConfiguration {
         config.bufferQueueLimit = prefs.getInt(BUFFER_QUEUE_LIMIT_PREF_STRING, 2);
 
         config.frameReleaseOffset = prefs.getInt(FRAME_RELEASE_OFFSET_PREF_STRING, -1);
+        
+        config.vsyncLookahead = prefs.getInt(VSYNC_LOOKAHEAD_PREF_STRING, 1);
 
         config.decoderThreadPriority = prefs.getInt(DECODER_THREAD_PRIORITY_PREF_STRING, 3);
         config.codecLowLatency = prefs.getBoolean(CODEC_LOW_LATENCY_PREF_STRING, true);
