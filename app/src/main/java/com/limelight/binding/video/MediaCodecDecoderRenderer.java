@@ -142,16 +142,16 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     private long lastFrameTimeNanos = 0;
     private long frameIntervalNanos = 8333333; // 120fps = 8.33ms
-    private static final long STUTTER_THRESHOLD_NS = 6500000; // 6.5ms (reduced from 7.5ms)
-    private static final long SMOOTHNESS_THRESHOLD_NS = 5500000; // 5.5ms (reduced from 7ms)
-    private static final long MAX_FRAME_TIME_NS = 7000000; // 7ms max frame time (reduced from 8ms)
+    private static final long STUTTER_THRESHOLD_NS = 6000000; // 6.0ms (reduced from 6.5ms)
+    private static final long SMOOTHNESS_THRESHOLD_NS = 5000000; // 5.0ms (reduced from 5.5ms)
+    private static final long MAX_FRAME_TIME_NS = 6500000; // 6.5ms max frame time (reduced from 7ms)
     private static final int FRAME_HISTORY_SIZE = 3; // Using smaller history for faster adaptation
     private final long[] frameTimeHistory = new long[FRAME_HISTORY_SIZE];
     private int frameHistoryIndex = 0;
     private long totalFrameTime = 0;
     private int frameCount = 0;
     private long lastVsyncTimeNanos = 0;
-    private static final long VSYNC_DEADLINE_NS = 300000; // 0.3ms deadline for VSYNC (reduced from 0.5ms)
+    private static final long VSYNC_DEADLINE_NS = 250000; // 0.25ms deadline for VSYNC (reduced from 0.3ms)
     private static final long INPUT_LATENCY_THRESHOLD_NS = 1500000; // 1.5ms threshold for input latency (reduced from 2ms)
     private long lastInputTimeNanos = 0;
     private int consecutiveLateFrames = 0;
@@ -189,7 +189,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     
     // Enhanced frame pacing for high-refresh content
     private boolean isHighRefreshContent = false;
-    private static final long REFRESH_240HZ_THRESHOLD = 230; // Hz
+    private static final long REFRESH_240HZ_THRESHOLD = 100; // Hz
     private long streamFrameTimeNs = 0; // Time between frames in ns
     private static final int FRAME_DELIVERY_JITTER_SAMPLES = 8;
     private final long[] frameDeliveryJitter = new long[FRAME_DELIVERY_JITTER_SAMPLES];
@@ -810,7 +810,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             isHighRefreshContent = true;
             streamFrameTimeNs = 1000000000L / refreshRate;
             optimalFrameIntervalNs = streamFrameTimeNs;
-            frameDropThresholdNs = streamFrameTimeNs * 3 / 2; // 1.5x frame time
+            frameDropThresholdNs = streamFrameTimeNs * 4/3; // 1.33x frame time (more aggressive)
             frameIntervalNanos = streamFrameTimeNs;
             
             // Get display refresh rate information to detect 240fps-to-120Hz scenario
@@ -845,7 +845,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             is240fpsOn120Hz = false;
             streamFrameTimeNs = 1000000000L / refreshRate;
             optimalFrameIntervalNs = streamFrameTimeNs;
-            frameDropThresholdNs = streamFrameTimeNs * 2; // 2x frame time for normal refresh rates
+            frameDropThresholdNs = streamFrameTimeNs * 3/2; // 1.5x frame time for normal refresh rates
         }
 
         return initializeDecoder(false);
@@ -1125,6 +1125,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         currentBufferQueueLimit++;
                         LimeLog.info("240Hz: Increasing buffer to " + currentBufferQueueLimit + " due to stutter (delta: " + (frameDelta / 1000000.0) + " ms)");
                     }
+                } else if (frameDelta < streamFrameTimeNs * 0.75) {
+                    // Frames coming in too quickly - may indicate a timing recovery
+                    // No need to do anything, as this should autocorrect
+                    LimeLog.info("240Hz: Fast frame detected (delta: " + (frameDelta / 1000000.0) + " ms)");
                 }
                 
                 // Special handling for 240fps content on 120Hz displays
@@ -1282,10 +1286,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     long adaptiveSafetyMargin;
                     if (ultraLowLatencyDevice) {
                         // Ultra-low latency path
-                        adaptiveSafetyMargin = isHighRefreshRate ? 25000 : 50000; // 0.025ms or 0.05ms
+                        adaptiveSafetyMargin = isHighRefreshRate ? 20000 : 40000; // 0.02ms or 0.04ms (reduced)
                     } else {
                         // Standard approach
-                        adaptiveSafetyMargin = isHighRefreshRate ? 50000 : 100000; // 0.05ms or 0.1ms
+                        adaptiveSafetyMargin = isHighRefreshRate ? 40000 : 80000; // 0.04ms or 0.08ms (reduced)
                     }
                     
                     // Calculate the next VSYNC time with improved accuracy
@@ -1293,18 +1297,20 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     if (jitterSampleCount > 5) {
                         // Use observed data to fine-tune the phase correction
                         phaseCorrection = (long)(0.05 * (accumulatedJitter / jitterSampleCount));
+                    } else if (isHighRefreshContent) {
+                        // Use a more aggressive default until we have good samples for high refresh rate content
+                        phaseCorrection = 50000; // 0.05ms default adjustment
                     }
                     
-                    // Calculate next VSYNC time
-                    long nextVsyncTimeNanos = currentTimeNanos + 
-                                          (vsyncPeriodNanos - ((currentTimeNanos - vsyncOffset + phaseCorrection) % vsyncPeriodNanos));
+                    nextPredictedVsyncTimeNanos = currentTimeNanos + 
+                                                    (vsyncPeriodNanos - ((currentTimeNanos - vsyncOffset + phaseCorrection) % vsyncPeriodNanos));
                     
                     // Apply frame release offset from preferences (in vsync intervals)
                     int frameOffset = ultraLowLatencyDevice ? 0 : prefs.frameReleaseOffset;
                     long offsetNanos = frameOffset * vsyncPeriodNanos + prefs.surfaceRenderDelay * 1_000_000L;
                     
                     // Calculate optimal presentation time for minimal latency
-                    long optimalPresentationTime = nextVsyncTimeNanos + offsetNanos + adaptiveSafetyMargin;
+                    long optimalPresentationTime = nextPredictedVsyncTimeNanos + offsetNanos + adaptiveSafetyMargin;
                     
                     // In emergency mode, handle very late frames
                     if (emergencyMode && (currentTimeNanos - lastVsyncTimeNanos) > FRAME_SKIP_THRESHOLD_NS) {
@@ -1318,7 +1324,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         videoDecoder.releaseOutputBuffer(nextOutputBuffer, optimalPresentationTime);
                         
                         // Update last VSYNC time for timing calculations
-                        lastVsyncTimeNanos = nextVsyncTimeNanos;
+                        lastVsyncTimeNanos = nextPredictedVsyncTimeNanos;
                     }
                     
                     // Track performance metrics
@@ -1413,11 +1419,20 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                                 long actualVsyncTime = currentTimeNanos;
                                                 long variance = Math.abs(actualVsyncTime - nextPredictedVsyncTimeNanos);
                                                 
+                                                // Reset jitter collection if we detect a significant timing change
+                                                if (variance > 1000000) { // Over 1ms change indicates significant timing shift
+                                                    // Reset jitter collection to adapt faster
+                                                    accumulatedJitter = 0;
+                                                    jitterSampleCount = 0;
+                                                    LimeLog.info("Significant timing variance detected (" + 
+                                                                  (variance/1000000.0) + "ms) - resetting jitter statistics");
+                                                }
+                                                
                                                 // For high refresh rates, we care more about recent measurements
                                                 // than older ones, so we give them more weight
                                                 if (isHighRefreshRate) {
                                                     // Clear old measurements to adapt faster to changes
-                                                    if (jitterSampleCount > 15) {
+                                                    if (jitterSampleCount > 5) {
                                                         accumulatedJitter = 0;
                                                         jitterSampleCount = 0;
                                                     }
@@ -1449,7 +1464,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                                 // Calculate the next VSYNC time with improved accuracy
                                                 // Add a small phase correction for more accurate VSYNC prediction
                                                 long phaseCorrection = 0;
-                                                if (jitterSampleCount > 5) {
+                                                if (jitterSampleCount > 3) {
                                                     // Use observed data to fine-tune the phase correction
                                                     phaseCorrection = (long)(0.01 * (accumulatedJitter / jitterSampleCount));
                                                 }
@@ -1467,7 +1482,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                                         // Minimal phase correction for key frames
                                                         phaseCorrection = Math.min(phaseCorrection, 10000); // max 0.01ms
                                                     }
-                                                } else if (jitterSampleCount > 5) {
+                                                } else if (jitterSampleCount > 3) {
                                                     // Standard correction for other content
                                                     phaseCorrection = (long)(0.01 * (accumulatedJitter / jitterSampleCount));
                                                 }
@@ -1482,8 +1497,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                             // Check if this device has ultra-low latency decoding capabilities
                                             // Update decode time history and calculate average
                                             long currentDecodeTimeNs = System.nanoTime() - lastDecodeToReleaseTimeNs;
-                                            decodeTimeHistory[decodeTimeHistoryIndex] = currentDecodeTimeNs;
-                                            decodeTimeHistoryIndex = (decodeTimeHistoryIndex + 1) % DECODE_TIME_HISTORY_SIZE;
+                                            if (lastDecodeToReleaseTimeNs > 0 && currentDecodeTimeNs > 0 && currentDecodeTimeNs < 10000000) {
+                                                // Only record reasonable values (under 10ms)
+                                                decodeTimeHistory[decodeTimeHistoryIndex] = currentDecodeTimeNs;
+                                                decodeTimeHistoryIndex = (decodeTimeHistoryIndex + 1) % DECODE_TIME_HISTORY_SIZE;
+                                            }
                                             
                                             // Calculate rolling average decode time
                                             long totalDecodeTime = 0;
@@ -1511,7 +1529,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                                         // This is a KEY FRAME that will be displayed on the 120Hz screen
                                                         
                                                         // For key frames (displayed frames), use absolute minimum safety margin
-                                                        adaptiveSafetyMargin = 0; // Just 0.001ms - absolute minimum possible
+                                                        adaptiveSafetyMargin = 0; // Absolute minimum possible
                                                         preferredFramePosition = true;
                                                         
                                                         // Special VSYNC prediction for key frames - align perfectly with next VSYNC
